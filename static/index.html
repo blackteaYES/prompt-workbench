@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f2ec">
+  <title>提示词完善工作台</title>
+  <link rel="stylesheet" href="styles.css?v=19">
+  <script src="browser-api.js?v=19" defer></script>
+  <script src="app.js?v=19" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand-lockup">
+        <div class="brand-symbol" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div>
+          <div class="brand-name">提示词</div>
+          <div class="brand-caption">完善工作台</div>
+        </div>
+      </div>
+
+      <button class="new-session-button" id="new-session-button" type="button">
+        <span class="plus-mark" aria-hidden="true">＋</span>
+        新建工作区
+      </button>
+
+      <div class="sidebar-section-head">
+        <span>最近工作区</span>
+        <span class="session-count" id="session-count">0</span>
+      </div>
+      <nav class="session-list" id="session-list" aria-label="已保存的会话"></nav>
+
+      <div class="sidebar-footnote">
+        <span class="local-indicator" aria-hidden="true"></span>
+        <div>
+          <strong>本地保存已开启</strong>
+          <span>问答与版本保存在此浏览器</span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <button class="mobile-brand" id="mobile-brand" type="button" aria-label="打开会话列表">
+          <div class="brand-symbol small" aria-hidden="true"><span></span><span></span><span></span></div>
+          <span>提示词工作台</span>
+        </button>
+        <div class="topbar-leading">
+          <button class="icon-button sidebar-toggle" id="sidebar-toggle" type="button" aria-label="收起侧栏" title="收起侧栏">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><path d="M8 6v12"/></svg>
+          </button>
+          <div class="crumbs" id="crumbs">
+            <span class="crumb-index">01</span>
+            <span>提示词工作室</span>
+            <span class="crumb-divider">/</span>
+            <span class="crumb-current" id="crumb-current">新建工作区</span>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button class="model-chip" id="model-chip" type="button" aria-label="修改模型连接" aria-haspopup="dialog" title="点击修改模型连接"><span class="model-chip-dot"></span><span id="model-chip-label">模型待配置</span></button>
+        </div>
+      </header>
+
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+      <section class="welcome-view" id="welcome-view">
+        <div class="welcome-kicker"><span class="kicker-line"></span> 从一个念头开始</div>
+        <h1>先说个大概，<br><em>我们一起把它问清楚。</em></h1>
+        <p class="welcome-copy">把问题、任务或者一段模糊的想法放进来。工作台会逐个追问关键细节；你决定什么时候生成提示词。</p>
+
+        <form class="starter-card" id="initial-form">
+          <label for="initial-request">你现在想让 AI 帮你做什么？</label>
+          <textarea id="initial-request" name="initial_request" maxlength="20000" rows="5" placeholder="例如：帮我做一个适合周末亲子游的旅行计划……" required></textarea>
+          <div class="starter-footer">
+            <span class="input-hint"><span class="sparkle-mark">✳</span> 不需要一次说完整，后面可以慢慢补充</span>
+            <button class="primary-button" type="submit"><span>开始梳理</span><span class="button-arrow" aria-hidden="true">↗</span></button>
+          </div>
+        </form>
+
+        <div class="examples-row">
+          <span class="examples-label">试试这些方向</span>
+          <button class="example-chip" data-example="帮我写一封邮件，邀请客户参加新品发布会。" type="button">写一封邮件</button>
+          <button class="example-chip" data-example="我想做一个帮助小团队整理会议结论的工具。" type="button">构思一个产品</button>
+          <button class="example-chip" data-example="帮我制定一个适合初学者的 8 周跑步计划。" type="button">制定一个计划</button>
+        </div>
+
+        <div class="welcome-footer"><span>01 / 理清目标</span><span>02 / 补足上下文</span><span>03 / 生成并评分</span></div>
+      </section>
+
+      <section class="workspace-view is-hidden" id="workspace-view">
+        <div class="workspace-grid">
+          <section class="conversation-column" id="conversation-column" aria-label="需求梳理对话">
+            <div class="session-heading">
+              <div>
+                <div class="eyebrow">需求访谈 <span class="eyebrow-rule"></span> <span id="round-label">第 01 问</span></div>
+                <h1 id="session-title">工作区</h1>
+                <p class="session-subtitle" id="session-subtitle">回答问题时可多选并补充说明；生成时机由你决定。</p>
+              </div>
+              <div class="conversation-heading-actions"><button class="panel-zoom-button" id="conversation-zoom-button" type="button" aria-haspopup="dialog"><span class="button-icon" aria-hidden="true">⤢</span>放大对话</button><div class="session-state" id="session-state"><span class="state-dot"></span><span id="session-state-label">正在准备提问</span></div></div>
+            </div>
+
+            <nav class="question-jump-nav is-hidden" id="question-jump-nav" aria-label="对话问题导航">
+              <button class="question-jump-rail" id="question-jump-rail" type="button" aria-label="浏览对话问题" title="悬停或点击查看并跳转到历史提问" aria-expanded="false" aria-controls="question-jump-menu">
+                <span class="question-jump-ruler" id="question-jump-ruler" aria-hidden="true"></span>
+              </button>
+              <div class="question-jump-menu" id="question-jump-menu" aria-hidden="true">
+                <div class="question-jump-menu-head"><strong>访谈问题</strong><span id="question-jump-count"></span></div>
+                <div class="question-jump-menu-list" id="question-jump-menu-list" role="listbox" aria-label="选择要跳转的问题"></div>
+              </div>
+            </nav>
+
+            <div class="conversation-scroll" id="conversation-scroll">
+              <div class="message-list" id="message-list"></div>
+              <div class="retry-row is-hidden" id="retry-row">
+                <span id="retry-copy">模型暂时没有响应。</span>
+                  <div class="retry-actions"><button class="text-button is-hidden" id="open-model-settings-retry" type="button" aria-controls="settings-dialog">模型设置 ↗</button><button class="text-button" id="retry-button" type="button">重试追问 ↗</button></div>
+              </div>
+            </div>
+            <div class="composer-dock" id="composer-slot" aria-live="polite"></div>
+          </section>
+
+          <aside class="result-column" id="result-column" aria-label="提示词结果与评分">
+            <div class="result-topline"><span>提示词结果</span><div class="result-topline-actions"><span id="version-count">尚未生成</span><button class="panel-zoom-button is-hidden" id="result-zoom-button" type="button" aria-haspopup="dialog"><span class="button-icon" aria-hidden="true">⤢</span>放大结果</button></div></div>
+            <section class="generation-action" id="generation-action" aria-live="polite">
+              <div class="generation-action-heading"><span class="generation-action-mark" aria-hidden="true">✳</span><div><span class="eyebrow">下一步</span><strong id="generate-heading">先回答第一个问题</strong></div></div>
+              <p id="generate-caption">回答并提交后，这里才会开放第一版生成。</p>
+              <button class="generate-button is-hidden" id="generate-button" type="button"><span class="generate-button-mark" aria-hidden="true">✦</span><span id="generate-button-label">生成第一版并评分</span></button>
+            </section>
+            <div class="empty-result" id="empty-result">
+              <span class="result-empty-tag" id="empty-result-tag">尚未生成</span>
+              <h2 id="empty-result-title">提示词还未生成</h2>
+              <p id="empty-result-copy">生成后，提示词、评分和完善说明会显示在这里。</p>
+              <div class="score-preview"><span>生成后显示评分</span><b>—<small>/100</small></b></div>
+            </div>
+
+            <div class="result-content is-hidden" id="result-content">
+              <div class="score-card" id="score-card">
+              <div class="score-card-top"><span>质量评分 <i>模型评估，仅供参考</i><b class="score-collapsed-summary is-hidden" id="score-collapsed-summary"></b></span><div class="score-card-actions"><span class="score-stamp" id="score-stamp">V01</span><button class="section-collapse-button" id="score-collapse-button" type="button" aria-expanded="true" aria-controls="score-card-body">收起</button></div></div>
+                <div id="score-card-body">
+                  <div class="score-number"><strong id="overall-score">—</strong><span>/ 100</span><span class="score-caption">提示词质量</span></div>
+                  <div class="score-radar-figure"><svg class="score-radar" id="score-radar" viewBox="0 0 320 230" role="img" aria-label="提示词质量维度雷达图"></svg><p class="score-radar-hint">中心为 0 分，越靠外分数越高</p></div>
+                  <div class="dimension-list" id="dimension-list"></div>
+                  <details class="score-explainer">
+                    <summary>这些分数代表什么？</summary>
+                    <p>总分是模型对整份提示词的参考评估；分数越高，表示关键信息写得越具体。评分不代表任务结果一定正确。</p>
+                    <dl>
+                      <div><dt>目标清晰度</dt><dd>要完成什么任务、面向谁。</dd></div>
+                      <div><dt>背景完整度</dt><dd>必要背景、对象和资料是否齐全。</dd></div>
+                      <div><dt>约束覆盖度</dt><dd>范围、边界和限制是否写明。</dd></div>
+                      <div><dt>输出要求明确度</dt><dd>格式、语气、长度等要求是否具体。</dd></div>
+                    </dl>
+                  </details>
+                </div>
+              </div>
+
+              <div class="prompt-card">
+                <div class="prompt-card-head"><div><span class="eyebrow">可直接使用</span><h2>完善后的提示词</h2></div><div class="prompt-actions"><button class="expand-preview-button" id="expand-prompt-preview" type="button" aria-haspopup="dialog"><span class="button-icon" aria-hidden="true">⤢</span>放大预览</button><div class="prompt-view-switch" role="group" aria-label="提示词显示方式"><button id="prompt-preview-button" class="is-selected" type="button" aria-pressed="true">预览</button><button id="prompt-source-button" type="button" aria-pressed="false">Markdown</button></div><button class="copy-button" id="copy-button" type="button" aria-label="复制提示词">复制</button></div></div>
+                <div class="prompt-text markdown-preview" id="prompt-text" aria-live="polite"></div>
+                <div class="prompt-card-foot"><span>版本 <b id="prompt-version-number">01</b></span><span id="prompt-created-at"></span></div>
+              </div>
+
+              <div class="notes-card"><div class="notes-heading"><span class="notes-mark">↗</span><strong>完善说明</strong></div><p id="improvement-notes"></p></div>
+
+              <div class="version-history" id="version-history"><div class="version-history-head"><div><span>版本记录</span><span>历史提示词</span><b class="version-history-summary" id="version-history-summary"></b></div><button class="section-collapse-button history-collapse-button" id="version-history-toggle" type="button" aria-expanded="true" aria-controls="version-history-body">收起</button></div><div id="version-history-body"><p class="version-history-description">每次生成都会保存一个版本。点击版本号，可查看当时的提示词和评分；旧版本会保留。</p><div id="version-list"></div></div></div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <footer class="global-footer"><span>本机工作区 <i>·</i> 会话数据仅保存在本机</span><span>工作台 <b>01</b></span></footer>
+    </main>
+  </div>
+
+  <dialog class="settings-dialog" id="settings-dialog">
+    <form class="settings-form" id="settings-form" method="dialog">
+      <div class="dialog-heading"><div><span class="eyebrow">模型连接</span><h2>选择你的工作引擎</h2></div><button class="dialog-close" id="settings-close" type="button" aria-label="关闭">×</button></div>
+      <p class="dialog-copy">模型请求由浏览器直接发送。设置保存在此浏览器；API Key 只留在当前页面内存中，刷新后需重新填写。模型服务需允许当前页面跨域访问。</p>
+      <label class="field-label" for="provider-select">服务类型</label>
+      <select id="provider-select" name="provider"><option value="openai">OpenAI 兼容接口</option><option value="ollama">Ollama 本地模型</option></select>
+
+      <div class="provider-fields" id="openai-fields">
+        <label class="field-label" for="openai-model">模型名称 <span>可选列表，也可手动输入</span></label>
+        <div class="model-picker"><input id="openai-model" list="openai-model-list" autocomplete="off" placeholder="例如 gpt-4o-mini"><datalist id="openai-model-list"></datalist><button class="fetch-model-button" id="fetch-openai-models" type="button">获取列表</button></div>
+        <label class="field-label" for="openai-base-url">Base URL <span>可选</span></label><input id="openai-base-url" autocomplete="url" placeholder="https://api.openai.com/v1">
+        <label class="field-label" for="openai-api-key">API Key <span id="openai-key-state">未配置</span></label><input id="openai-api-key" type="password" autocomplete="new-password" placeholder="输入后仅在当前页面内存中保留">
+        <button class="clear-key-button" id="clear-openai-key" type="button">清除当前页面中的临时密钥</button>
+      </div>
+
+      <div class="provider-fields is-hidden" id="ollama-fields">
+        <label class="field-label" for="ollama-model">模型名称 <span>可选列表，也可手动输入</span></label>
+        <div class="model-picker"><input id="ollama-model" list="ollama-model-list" autocomplete="off" placeholder="qwen2.5:7b"><datalist id="ollama-model-list"></datalist><button class="fetch-model-button" id="fetch-ollama-models" type="button">获取列表</button></div>
+        <label class="field-label" for="ollama-base-url">Base URL</label><input id="ollama-base-url" autocomplete="url" placeholder="http://127.0.0.1:11434">
+        <div class="ollama-tip"><span>↗</span> 请先启动 Ollama 并下载模型；同时配置 OLLAMA_ORIGINS 允许当前页面跨域访问。</div>
+      </div>
+
+      <div class="dialog-actions"><button class="secondary-button model-test-button" id="test-model-button" type="button">测试模型</button><div class="dialog-action-group"><button class="dialog-cancel" id="settings-cancel" type="button">取消</button><button class="primary-button" type="submit">应用设置 <span class="button-arrow" aria-hidden="true">↗</span></button></div></div>
+      <div class="settings-feedback" id="settings-feedback" role="status"></div>
+    </form>
+  </dialog>
+
+  <dialog class="prompt-preview-dialog" id="prompt-preview-dialog" aria-labelledby="prompt-preview-title">
+    <div class="prompt-preview-shell">
+      <header class="prompt-preview-head">
+        <div class="prompt-preview-heading"><span class="eyebrow">可直接使用 · <span id="prompt-preview-version">V01</span></span><h2 id="prompt-preview-title">完善后的提示词</h2></div>
+        <div class="prompt-preview-actions">
+          <div class="prompt-view-switch" role="group" aria-label="放大预览显示方式"><button id="prompt-modal-preview-button" class="is-selected" type="button" aria-pressed="true">预览</button><button id="prompt-modal-source-button" type="button" aria-pressed="false">Markdown</button></div>
+          <button class="copy-button" id="prompt-modal-copy-button" type="button" aria-label="复制提示词">复制</button>
+          <button class="dialog-close prompt-preview-close" id="prompt-preview-close" type="button" aria-label="关闭放大预览">×</button>
+        </div>
+      </header>
+      <div class="prompt-preview-body"><div class="prompt-text markdown-preview" id="prompt-modal-text" aria-live="polite"></div></div>
+      <footer class="prompt-preview-foot"><span>版本 <b id="prompt-preview-footer-version">01</b></span><span>点击“Markdown”可查看并复制原始格式</span></footer>
+    </div>
+  </dialog>
+
+  <dialog class="focus-dialog" id="focus-dialog" aria-labelledby="focus-dialog-title">
+    <div class="focus-dialog-shell">
+      <header class="focus-dialog-head"><div><span class="eyebrow">专注查看</span><h2 id="focus-dialog-title">需求对话</h2></div><button class="dialog-close" id="focus-dialog-close" type="button" aria-label="关闭放大视图">×</button></header>
+      <div class="focus-dialog-content" id="focus-dialog-content"></div>
+    </div>
+  </dialog>
+</body>
+</html>
