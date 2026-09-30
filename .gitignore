@@ -1,7 +1,6 @@
 .env
 __pycache__/
 *.py[cod]
-data/
 .venv/
 .uv-cache/
 demo/
