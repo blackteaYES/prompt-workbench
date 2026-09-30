@@ -17,6 +17,10 @@ const state = {
   pendingAnswerCheck: null,
   recommendationPendingQuestionId: null,
   recommendationFailedQuestionId: null,
+  modelLists: { openai: [], ollama: [] },
+  askNextPending: false,
+  conversationThinkingTimer: null,
+  conversationThinkingStartedAt: 0,
   suppressAutoRetry: false,
   toastTimer: null
 };
@@ -70,7 +74,8 @@ function showRetry(message, mode) {
   state.retryMode = mode;
   byId("retry-copy").textContent = message;
   const needsModelSettings = /(?:尚未配置|未配置|缺少).*(?:API\s*Key|密钥|模型)/i.test(message);
-  byId("open-model-settings-retry").classList.toggle("is-hidden", !needsModelSettings);
+  const shouldOfferModelSettings = needsModelSettings || /(?:API\s*Key|密钥|Base URL|模型名称|模型服务找不到)/i.test(message);
+  byId("open-model-settings-retry").classList.toggle("is-hidden", !shouldOfferModelSettings);
   const labels = {
     generate: "重试生成 ↗",
     "answer-check": "检查回答状态 ↗",
@@ -513,18 +518,6 @@ function createAnswerComposer(message, hasVersions) {
   input.addEventListener("input", () => { state.answerDraftContent = input.value; });
   form.append(label, input);
 
-  const thinkingNote = document.createElement("div");
-  thinkingNote.className = "answer-thinking-note is-hidden";
-  thinkingNote.setAttribute("role", "status");
-  thinkingNote.setAttribute("aria-live", "polite");
-  const thinkingSpinner = document.createElement("span");
-  thinkingSpinner.className = "thinking-spinner";
-  thinkingSpinner.setAttribute("aria-hidden", "true");
-  const thinkingText = document.createElement("span");
-  thinkingText.textContent = "已收到本轮回答，正在整理需求并准备下一问…";
-  thinkingNote.append(thinkingSpinner, thinkingText);
-  form.append(thinkingNote);
-
   const footer = document.createElement("div");
   footer.className = "composer-bottom answer-composer-footer";
   const footerHint = document.createElement("span");
@@ -720,9 +713,21 @@ function makeMessage(message, options = {}) {
   meta.className = "message-meta";
   const name = document.createElement("strong");
   name.textContent = speaker === "user" ? (message.kind === "feedback" ? "你的修改意见" : "你") : (message.kind === "notice" ? "梳理提示" : "需求访谈员");
+  const isUserAnswer = speaker === "user" && message.kind === "answer";
+  if (!isUserAnswer) meta.append(name);
+  if (Number.isInteger(options.questionNumber)) {
+    const round = document.createElement("span");
+    round.className = "message-round-number";
+    round.textContent = String(options.questionNumber);
+    round.setAttribute("aria-label", speaker === "user"
+      ? `第 ${options.questionNumber} 个问题的回答`
+      : `第 ${options.questionNumber} 个问题`);
+    round.title = speaker === "user" ? `对应第 ${options.questionNumber} 个问题` : `第 ${options.questionNumber} 个问题`;
+    meta.append(round);
+  }
   const timestamp = document.createElement("span");
   timestamp.textContent = displayDateTime(message.created_at);
-  meta.append(name, timestamp);
+  meta.append(timestamp);
   const text = document.createElement("div");
   text.className = "message-text";
   if (speaker === "user" && message.kind === "answer") renderAnswerRecord(text, message);
@@ -1039,7 +1044,23 @@ function renderWorkspace() {
     })
     : [];
   const answerCount = session.messages.filter((message) => message.role === "user" && message.kind === "answer").length;
-  const canGenerate = hasVersions ? newUserInputs.length > 0 : answerCount > 0;
+  const interviewFinished = lastMessage?.role === "assistant" && lastMessage.kind === "notice";
+  const completionNoticeIsNew = interviewFinished && (!hasVersions || (
+    Number(latestVersion.source_message_id) > 0
+      ? Number(lastMessage.id) > Number(latestVersion.source_message_id)
+      : Date.parse(lastMessage.created_at) > latestVersionTime
+  ));
+  const currentGenerationModel = selectedWorkflowModel("generation");
+  const previousGenerationModel = latestVersion?.generation_model || (state.modelSettings ? {
+    provider: state.modelSettings.provider,
+    model: state.modelSettings.providers[state.modelSettings.provider].model || "",
+  } : null);
+  const generationModelChanged = Boolean(hasVersions && currentGenerationModel && previousGenerationModel && (
+    currentGenerationModel.provider !== previousGenerationModel.provider || currentGenerationModel.model !== previousGenerationModel.model
+  ));
+  const canGenerate = hasVersions
+    ? newUserInputs.length > 0 || completionNoticeIsNew || generationModelChanged
+    : answerCount > 0 || interviewFinished;
   const feedbackMode = hasVersions && (
     (isActiveQuestion && state.composerMode === "feedback") ||
     (!isActiveQuestion && lastMessage?.role === "assistant" && lastMessage.kind === "notice")
@@ -1061,9 +1082,24 @@ function renderWorkspace() {
     : "每轮回答一个问题；选项可多选，也能补充文字。提交一条回答后即可手动生成第一版。";
 
   const messageList = byId("message-list");
+  const questionOrdinalById = new Map();
+  session.messages.forEach((message) => {
+    if (message.role === "assistant" && message.kind === "question") {
+      questionOrdinalById.set(String(message.id), questionOrdinalById.size + 1);
+    }
+  });
+  let answerOrdinal = 0;
   messageList.replaceChildren(...session.messages.map((message) => {
     const isCurrentMessage = message.id === lastMessage?.id;
+    let questionNumber = null;
+    if (message.role === "assistant" && message.kind === "question") {
+      questionNumber = questionOrdinalById.get(String(message.id));
+    } else if (message.role === "user" && message.kind === "answer") {
+      answerOrdinal += 1;
+      questionNumber = questionOrdinalById.get(String(message.question_id)) || answerOrdinal;
+    }
     return makeMessage(message, {
+      questionNumber,
       isActiveQuestion: isActiveQuestion && isCurrentMessage,
       isFeedbackMode: feedbackMode && isCurrentMessage,
     });
@@ -1099,15 +1135,24 @@ function renderWorkspace() {
   generationAction.classList.toggle("is-ready", canGenerate);
   generateButton.classList.toggle("is-hidden", !canGenerate);
   generateButton.disabled = !canGenerate;
-  if (canGenerate && hasVersions) {
+  if (canGenerate && hasVersions && newUserInputs.length > 0) {
     byId("generate-heading").textContent = "V" + String(latestVersion.revision).padStart(2, "0") + " 后有 " + newUserInputs.length + " 条信息更新";
     byId("generate-caption").textContent = "可现在按这些新回答或意见生成下一版，也可以继续回答当前问题。";
+  } else if (canGenerate && hasVersions && generationModelChanged) {
+    byId("generate-heading").textContent = "已切换生成模型";
+    byId("generate-caption").textContent = "可用选定模型重新整理当前需求并评分。";
+  } else if (canGenerate && hasVersions) {
+    byId("generate-heading").textContent = "当前需求已梳理完成";
+    byId("generate-caption").textContent = "访谈员判断现有信息足够；你可以直接生成新版本，也可以提交版本意见。";
   } else if (canGenerate) {
     byId("generate-heading").textContent = "已提交 " + answerCount + " 条回答，可以生成第一版";
     byId("generate-caption").textContent = "点击后才会生成提示词和评分；也可以继续访谈再生成。";
   } else if (hasVersions && waitingForModel) {
     byId("generate-heading").textContent = "等本轮追问完成后再继续";
     byId("generate-caption").textContent = "如果模型没有响应，请先重试；新回答或意见保存后可生成下一版。";
+  } else if (hasVersions && interviewFinished) {
+    byId("generate-heading").textContent = "最新版本已包含当前需求";
+    byId("generate-caption").textContent = "如需重新生成，可切换生成模型；要继续完善，请提交版本意见。";
   } else if (hasVersions) {
     byId("generate-heading").textContent = "还没有新的回答或意见";
     byId("generate-caption").textContent = "回答当前问题，或提交版本意见；新内容保存后才可生成下一版。";
@@ -1115,6 +1160,11 @@ function renderWorkspace() {
     byId("generate-heading").textContent = "先回答第一个问题";
     byId("generate-caption").textContent = "提交一条回答后，这里才会开放第一版生成。";
   }
+  if (canGenerate && !hasVersions && interviewFinished) {
+    byId("generate-heading").textContent = "需求已梳理完成，可以生成第一版";
+    byId("generate-caption").textContent = "访谈员判断当前信息足够；你也可以继续补充，再手动生成。";
+  }
+  renderWorkflowModelSelectors();
   byId("generate-button-label").textContent = hasVersions ? "生成下一版并评分" : "生成第一版并评分";
   byId("version-count").textContent = hasVersions ? String(versions.length).padStart(2, "0") + " 个版本" : "尚未生成";
   byId("result-zoom-button").classList.toggle("is-hidden", !hasVersions);
@@ -1190,12 +1240,19 @@ function renderVersionPanel(version) {
   const svgNamespace = "http://www.w3.org/2000/svg";
   const center = { x: 160, y: 118 };
   const radius = 68;
-  const axes = [
-    { name: "目标清晰度", label: "目标", angle: -90 },
-    { name: "背景完整度", label: "背景", angle: 0 },
-    { name: "约束覆盖度", label: "约束", angle: 90 },
-    { name: "输出要求明确度", label: "输出", angle: 180 },
-  ];
+  const shortLabels = {
+    "目标清晰度": "目标",
+    "背景完整度": "背景",
+    "受众与场景适配度": "受众与场景",
+    "约束覆盖度": "约束",
+    "输出要求明确度": "输出要求",
+    "可执行性与验收标准": "可执行性",
+  };
+  const axes = dimensionItems.map((item, index) => ({
+    name: item.name,
+    label: shortLabels[item.name] || item.name,
+    angle: -90 + (360 * index / Math.max(1, dimensionItems.length)),
+  }));
   const pointsAt = (scale) => axes.map((axis) => {
     const radians = axis.angle * Math.PI / 180;
     return {
@@ -1213,7 +1270,7 @@ function renderVersionPanel(version) {
   };
   radar.replaceChildren();
   const title = document.createElementNS(svgNamespace, "title");
-  title.textContent = "提示词四项评分雷达图";
+  title.textContent = `提示词${axes.length}项评分雷达图`;
   radar.append(title);
   for (const level of [0.25, 0.5, 0.75, 1]) {
     addSvgElement("polygon", { points: toPointString(pointsAt(level)), class: "score-radar-grid" });
@@ -1237,10 +1294,14 @@ function renderVersionPanel(version) {
     r: 3.5,
     class: "score-radar-point",
   }));
-  addSvgElement("text", { x: center.x, y: 26, class: "score-radar-label", "text-anchor": "middle" }, "目标");
-  addSvgElement("text", { x: 246, y: center.y + 3, class: "score-radar-label", "text-anchor": "start" }, "背景");
-  addSvgElement("text", { x: center.x, y: 218, class: "score-radar-label", "text-anchor": "middle" }, "约束");
-  addSvgElement("text", { x: 74, y: center.y + 3, class: "score-radar-label", "text-anchor": "end" }, "输出");
+  const labelRadius = radius + 22;
+  for (const axis of axes) {
+    const radians = axis.angle * Math.PI / 180;
+    const x = center.x + Math.cos(radians) * labelRadius;
+    const y = center.y + Math.sin(radians) * labelRadius + (Math.sin(radians) > 0.65 ? 4 : 0);
+    const anchor = Math.cos(radians) > 0.2 ? "start" : Math.cos(radians) < -0.2 ? "end" : "middle";
+    addSvgElement("text", { x, y, class: "score-radar-label", "text-anchor": anchor }, axis.label);
+  }
 
   const versionList = byId("version-list");
   versionList.replaceChildren();
@@ -1294,8 +1355,10 @@ async function startSession(initialRequest) {
 }
 
 async function askNext(mode) {
-  if (!state.session) return;
-  byId("session-state-label").textContent = mode === "initial" ? "正在准备提问" : "正在整理回答";
+  if (!state.session || state.askNextPending) return;
+  state.askNextPending = true;
+  hideRetry();
+  setConversationThinking(true, mode === "answer" ? "answer-retry" : mode);
   try {
     await request(`/api/sessions/${state.session.id}/ask-next`, {
       method: "POST",
@@ -1305,7 +1368,11 @@ async function askNext(mode) {
     await loadSession(state.session.id);
     await refreshSessions();
   } catch (error) {
-    showRetry(error.message, mode === "refinement" ? "refinement" : "answer");
+    const retryMode = mode === "initial" ? "initial" : mode === "refinement" ? "refinement" : "answer";
+    showRetry(error.message, retryMode);
+  } finally {
+    state.askNextPending = false;
+    setConversationThinking(false, mode);
   }
 }
 
@@ -1322,12 +1389,10 @@ async function submitAnswer(event) {
     return;
   }
 
-  const button = form.querySelector("button[type=submit]");
   const previousMessageIds = new Set(state.session.messages.map((message) => String(message.id)));
   const expectedContent = answerMessageContent(content, selectedOptions);
   byId("session-state-label").textContent = "正在理解你的回答";
   setComposerThinking(form, true);
-  setBusy(button, true, "正在理解…");
   try {
     await request("/api/sessions/" + state.session.id + "/turn", {
       method: "POST",
@@ -1347,7 +1412,7 @@ async function submitAnswer(event) {
       state.pendingAnswerCheck = null;
       state.composerMode = null;
       await loadSession(state.session.id).catch(() => {});
-      showRetry("回答已保存，但模型没有完成下一轮提问。请检查模型连接，再点“重试访谈”；回答不会重复提交。", "answer");
+      showRetry(`回答已保存，但模型没能生成下一问。原因：${error.message || "模型服务暂时无法完成请求"} 修复模型设置或服务后，点“重试访谈”即可继续；回答不会重复提交。`, "answer");
     } else if (error.status === null || error.status >= 500) {
       state.pendingAnswerCheck = { expectedContent, previousMessageIds: [...previousMessageIds] };
       await checkAnswerSubmission();
@@ -1356,17 +1421,61 @@ async function submitAnswer(event) {
       showToast(`回答没有提交：${error.message} 输入内容仍保留，请修正后重新提交。`);
     }
   } finally {
-    setBusy(button, false);
     setComposerThinking(form, false);
   }
 }
 
 function setComposerThinking(form, isThinking) {
-  form.classList.toggle("is-thinking", isThinking);
   form.setAttribute("aria-busy", String(isThinking));
-  form.querySelector(".answer-thinking-note")?.classList.toggle("is-hidden", !isThinking);
   form.querySelectorAll("button, textarea").forEach((control) => { control.disabled = isThinking; });
-  byId("session-state").classList.toggle("is-thinking", isThinking);
+  setConversationThinking(isThinking, "answer");
+}
+
+function setConversationThinking(isThinking, mode = "answer") {
+  const indicator = byId("conversation-thinking");
+  const copyByMode = {
+    initial: {
+      title: "正在请求模型生成第一道问题",
+      detail: "初始需求已保存，正在等待模型返回澄清问题。",
+    },
+    answer: {
+      title: "正在提交本轮回答",
+      detail: "提交后会请求模型结合已有信息生成下一问。",
+    },
+    "answer-retry": {
+      title: "正在重新请求下一问",
+      detail: "已保存的回答会继续保留，不会再次提交。",
+    },
+    refinement: {
+      title: "正在重新检查版本意见",
+      detail: "已保存的修改意见会保留，模型正在判断是否需要追问。",
+    },
+  };
+  const copy = copyByMode[mode] || copyByMode.answer;
+  byId("conversation-thinking-title").textContent = copy.title;
+  byId("conversation-thinking-detail").textContent = copy.detail;
+  window.clearInterval(state.conversationThinkingTimer);
+  state.conversationThinkingTimer = null;
+  indicator.classList.toggle("is-hidden", !isThinking);
+  indicator.setAttribute("aria-hidden", String(!isThinking));
+  indicator.setAttribute("aria-busy", String(isThinking));
+  byId("session-state").classList.toggle("is-hidden", isThinking);
+  if (isThinking) {
+    state.conversationThinkingStartedAt = Date.now();
+    const updateElapsed = () => {
+      const seconds = Math.floor((Date.now() - state.conversationThinkingStartedAt) / 1000);
+      const status = seconds >= 15 ? "模型响应较慢" : "等待模型响应";
+      byId("conversation-thinking-elapsed").textContent = `${status} · 已等待 ${seconds} 秒`;
+    };
+    updateElapsed();
+    state.conversationThinkingTimer = window.setInterval(updateElapsed, 1000);
+    window.requestAnimationFrame(() => {
+      const scroll = byId("conversation-scroll");
+      scroll.scrollTop = scroll.scrollHeight;
+    });
+  } else {
+    state.conversationThinkingStartedAt = 0;
+  }
 }
 
 function answerMessageContent(content, selectedOptions) {
@@ -1454,6 +1563,9 @@ async function submitFeedback(event) {
 async function generatePrompt() {
   if (!state.session) return;
   const button = byId("generate-button");
+  const action = byId("generation-action");
+  action.classList.add("is-generating");
+  button.classList.add("is-generating");
   setBusy(button, true, "正在生成并评分…");
   hideRetry();
   try {
@@ -1467,6 +1579,8 @@ async function generatePrompt() {
     else showToast(error.message);
   } finally {
     setBusy(button, false);
+    button.classList.remove("is-generating");
+    action.classList.remove("is-generating");
   }
 }
 
@@ -1494,7 +1608,7 @@ function populateProviderFields(provider) {
     byId("openai-model").value = config.model || "";
     byId("openai-base-url").value = config.base_url || "";
     byId("openai-api-key").value = "";
-    byId("openai-key-state").textContent = config.api_key_configured ? "已有可用密钥" : "未配置";
+    byId("openai-key-state").textContent = config.api_key_configured ? "已保存，留空沿用" : "未配置";
   } else {
     byId("ollama-model").value = config.model || "";
     byId("ollama-base-url").value = config.base_url || "";
@@ -1511,11 +1625,101 @@ function renderModelChip() {
   byId("model-chip-label").textContent = `${providerLabel} · ${config.model || "未填写模型"}`;
 }
 
+function renderWorkflowModelSelectors() {
+  if (!state.modelSettings) return;
+  const settings = state.modelSettings;
+  for (const [workflow, id] of [["interview", "interview-model-select"], ["generation", "generation-model-select"]]) {
+    const select = byId(id);
+    const savedChoice = settings.workflow_models?.[workflow] || { provider: "", model: "" };
+    const selectedProvider = savedChoice.provider || settings.provider;
+    const selectedValue = savedChoice.model ? JSON.stringify([selectedProvider, savedChoice.model]) : "";
+    select.replaceChildren();
+
+    const defaultOption = document.createElement("option");
+    defaultOption.value = "";
+    const defaultProviderLabel = settings.provider === "ollama" ? "Ollama" : "OpenAI 兼容";
+    defaultOption.textContent = `默认 · ${defaultProviderLabel} · ${settings.providers[settings.provider].model || "未填写"}`;
+    select.title = "可在顶部模型设置中获取可用模型列表，再按用途选择。";
+    select.append(defaultOption);
+
+    for (const provider of ["openai", "ollama"]) {
+      const config = settings.providers[provider];
+      const models = new Set(state.modelLists[provider] || []);
+      if (config.model) models.add(config.model);
+      if (selectedProvider === provider && savedChoice.model) models.add(savedChoice.model);
+      if (!models.size) continue;
+      const group = document.createElement("optgroup");
+      group.label = provider === "openai" ? "OpenAI 兼容接口" : "Ollama";
+      for (const model of [...models].sort((left, right) => left.localeCompare(right))) {
+        const option = document.createElement("option");
+        option.value = JSON.stringify([provider, model]);
+        option.textContent = model;
+        group.append(option);
+      }
+      select.append(group);
+    }
+    select.value = selectedValue;
+  }
+}
+
+function selectedWorkflowModel(workflow) {
+  const settings = state.modelSettings;
+  if (!settings) return null;
+  const choice = settings.workflow_models?.[workflow] || { provider: "", model: "" };
+  const provider = choice.provider || settings.provider;
+  return { provider, model: choice.model || settings.providers[provider].model || "" };
+}
+
+function renderWorkspaceKeepingScroll() {
+  if (!state.session) return;
+  const scroll = byId("conversation-scroll");
+  const scrollTop = scroll.scrollTop;
+  renderWorkspace();
+  window.requestAnimationFrame(() => {
+    scroll.scrollTop = scrollTop;
+    updateQuestionJumpActive();
+  });
+}
+
+async function saveWorkflowModel(workflow, select) {
+  if (!state.modelSettings) return;
+  let choice = { provider: "", model: "" };
+  if (select.value) {
+    try {
+      const [provider, model] = JSON.parse(select.value);
+      if (["openai", "ollama"].includes(provider) && typeof model === "string") choice = { provider, model };
+    } catch {
+      select.value = "";
+      return;
+    }
+  }
+  const previousSettings = state.modelSettings;
+  const workflowModels = { ...previousSettings.workflow_models, [workflow]: choice };
+  select.disabled = true;
+  try {
+    state.modelSettings = await request("/api/settings/model", {
+      method: "PUT",
+      body: JSON.stringify({ provider: previousSettings.provider, workflow_models: workflowModels }),
+    });
+    renderWorkflowModelSelectors();
+    if (workflow === "generation") renderWorkspaceKeepingScroll();
+    showToast(choice.model ? `已为${workflow === "interview" ? "访谈" : "生成与评分"}切换模型。` : "已恢复使用默认模型。");
+  } catch (error) {
+    state.modelSettings = previousSettings;
+    renderWorkflowModelSelectors();
+    if (workflow === "generation") renderWorkspaceKeepingScroll();
+    showToast(error.message);
+  } finally {
+    select.disabled = false;
+  }
+}
+
 async function refreshModelSettings() {
   state.modelSettings = await request("/api/settings/model");
   byId("provider-select").value = state.modelSettings.provider;
   populateProviderFields(state.modelSettings.provider);
   renderModelChip();
+  renderWorkflowModelSelectors();
 }
 
 async function openModelSettingsDialog(options = {}) {
@@ -1554,7 +1758,15 @@ async function saveModelSettings(event) {
     });
     populateProviderFields(provider);
     renderModelChip();
-    feedback.textContent = "设置已应用于当前浏览器。API Key 只保留在此页面内存中。";
+    renderWorkflowModelSelectors();
+    feedback.style.color = "#70876b";
+    if (provider === "ollama") {
+      feedback.textContent = "Ollama 设置已保存。";
+    } else if (state.modelSettings.providers.openai.api_key_configured) {
+      feedback.textContent = "设置已保存。API Key 保存在此浏览器，留空会继续沿用。";
+    } else {
+      feedback.textContent = "设置已保存。请填写并应用 API Key 后再测试模型。";
+    }
     if (provider === "openai") byId("openai-api-key").value = "";
   } catch (error) {
     feedback.textContent = error.message;
@@ -1583,26 +1795,109 @@ function setSettingsFeedback(message, isError = false) {
 
 async function fetchProviderModels(provider) {
   const button = byId(provider === "openai" ? "fetch-openai-models" : "fetch-ollama-models");
-  const modelList = byId(`${provider}-model-list`);
+  const toggle = byId(`${provider}-model-toggle`);
+  if (button.disabled) return;
   setBusy(button, true, "正在获取…");
+  toggle.disabled = true;
   setSettingsFeedback("正在连接服务并读取模型列表…");
   try {
     const result = await request("/api/models/list", {
       method: "POST",
       body: JSON.stringify(modelActionPayload(provider))
     });
-    modelList.replaceChildren(...(result.models || []).map((name) => {
-      const option = document.createElement("option");
-      option.value = name;
-      return option;
-    }));
-    setSettingsFeedback(`已获取 ${modelList.options.length} 个模型。点击模型名称输入框选择，或直接输入自定义名称。`);
-    byId(`${provider}-model`).focus();
+    state.modelLists[provider] = result.models || [];
+    renderModelOptions(provider, "", true);
+    renderWorkflowModelSelectors();
+    setSettingsFeedback(`已获取 ${state.modelLists[provider].length} 个模型，列表已展开；点击选择，或直接输入自定义名称。`);
   } catch (error) {
     setSettingsFeedback(error.message, true);
   } finally {
     setBusy(button, false);
+    toggle.disabled = false;
   }
+}
+
+function renderModelOptions(provider, query = "", isOpen = true) {
+  const input = byId(`${provider}-model`);
+  const menu = byId(`${provider}-model-options`);
+  const toggle = byId(`${provider}-model-toggle`);
+  const searchText = String(query || "").trim().toLocaleLowerCase();
+  const models = state.modelLists[provider] || [];
+  const visibleModels = searchText
+    ? models.filter((name) => name.toLocaleLowerCase().includes(searchText))
+    : models;
+  menu.replaceChildren();
+
+  if (!models.length) {
+    const empty = document.createElement("div");
+    empty.className = "model-options-empty";
+    empty.textContent = "点击“获取列表”读取可用模型，也可以手动输入名称。";
+    menu.append(empty);
+  } else if (!visibleModels.length) {
+    const empty = document.createElement("div");
+    empty.className = "model-options-empty";
+    empty.textContent = "没有匹配的模型；仍可使用输入的自定义名称。";
+    menu.append(empty);
+  } else {
+    for (const name of visibleModels) {
+      const option = document.createElement("button");
+      option.className = "model-option";
+      option.type = "button";
+      option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", String(input.value === name));
+      option.classList.toggle("is-selected", input.value === name);
+      option.textContent = name;
+      option.addEventListener("click", () => {
+        input.value = name;
+        closeModelMenu(provider);
+        input.focus();
+        setSettingsFeedback(`已选择模型：${name}`);
+      });
+      menu.append(option);
+    }
+  }
+
+  menu.classList.toggle("is-hidden", !isOpen);
+  menu.setAttribute("aria-hidden", String(!isOpen));
+  input.setAttribute("aria-expanded", String(isOpen));
+  toggle.setAttribute("aria-expanded", String(isOpen));
+  toggle.setAttribute("aria-label", isOpen ? "收起模型列表" : "展开模型列表");
+  toggle.title = isOpen ? "收起模型列表" : "展开模型列表";
+}
+
+function closeModelMenu(provider) {
+  const menu = byId(`${provider}-model-options`);
+  menu.classList.add("is-hidden");
+  menu.setAttribute("aria-hidden", "true");
+  byId(`${provider}-model`).setAttribute("aria-expanded", "false");
+  byId(`${provider}-model-toggle`).setAttribute("aria-expanded", "false");
+  byId(`${provider}-model-toggle`).setAttribute("aria-label", "展开模型列表");
+  byId(`${provider}-model-toggle`).title = "展开模型列表";
+}
+
+function invalidateModelOptions(provider) {
+  state.modelLists[provider] = [];
+  closeModelMenu(provider);
+  renderWorkflowModelSelectors();
+}
+
+function closeAllModelMenus() {
+  closeModelMenu("openai");
+  closeModelMenu("ollama");
+}
+
+function toggleModelMenu(provider) {
+  const menu = byId(`${provider}-model-options`);
+  if (!menu.classList.contains("is-hidden")) {
+    closeModelMenu(provider);
+    return;
+  }
+  if (state.modelLists[provider]?.length) {
+    renderModelOptions(provider, "", true);
+    return;
+  }
+  if (byId(`fetch-${provider}-models`).disabled) return;
+  fetchProviderModels(provider);
 }
 
 async function testModelConnection() {
@@ -1623,7 +1918,7 @@ async function testModelConnection() {
   }
 }
 
-async function clearTemporaryKey() {
+async function clearSavedKey() {
   const feedback = byId("settings-feedback");
   try {
     const current = state.modelSettings.providers.openai;
@@ -1633,8 +1928,9 @@ async function clearTemporaryKey() {
     });
     populateProviderFields("openai");
     renderModelChip();
+    invalidateModelOptions("openai");
     feedback.style.color = "#70876b";
-    feedback.textContent = "当前页面内存中的临时密钥已清除。";
+    feedback.textContent = "已清除此浏览器中保存的 API Key。";
   } catch (error) {
     feedback.style.color = "#a14a30";
     feedback.textContent = error.message;
@@ -1806,13 +2102,48 @@ function wireEvents() {
   byId("model-chip").addEventListener("click", openModelSettingsDialog);
   byId("open-model-settings-retry").addEventListener("click", openModelSettingsDialog);
   byId("settings-close").addEventListener("click", () => byId("settings-dialog").close());
-  byId("settings-cancel").addEventListener("click", () => byId("settings-dialog").close());
-  byId("provider-select").addEventListener("change", (event) => populateProviderFields(event.target.value));
+  byId("provider-select").addEventListener("change", (event) => {
+    closeAllModelMenus();
+    populateProviderFields(event.target.value);
+  });
+  byId("interview-model-select").addEventListener("change", (event) => saveWorkflowModel("interview", event.target));
+  byId("generation-model-select").addEventListener("change", (event) => saveWorkflowModel("generation", event.target));
   byId("settings-form").addEventListener("submit", saveModelSettings);
   byId("fetch-openai-models").addEventListener("click", () => fetchProviderModels("openai"));
   byId("fetch-ollama-models").addEventListener("click", () => fetchProviderModels("ollama"));
   byId("test-model-button").addEventListener("click", testModelConnection);
-  byId("clear-openai-key").addEventListener("click", clearTemporaryKey);
+  byId("clear-openai-key").addEventListener("click", clearSavedKey);
+  for (const provider of ["openai", "ollama"]) {
+    byId(`${provider}-model-toggle`).addEventListener("click", () => toggleModelMenu(provider));
+    byId(`${provider}-base-url`).addEventListener("input", () => invalidateModelOptions(provider));
+    byId(`${provider}-model`).addEventListener("input", (event) => {
+      if (state.modelLists[provider]?.length) renderModelOptions(provider, event.target.value, true);
+    });
+    byId(`${provider}-model`).addEventListener("keydown", (event) => {
+      const menu = byId(`${provider}-model-options`);
+      if (event.key === "ArrowDown" && state.modelLists[provider]?.length) {
+        event.preventDefault();
+        if (menu.classList.contains("is-hidden")) renderModelOptions(provider, byId(`${provider}-model`).value, true);
+        menu.querySelector(".model-option")?.focus();
+      } else if (event.key === "Enter" && !menu.classList.contains("is-hidden")) {
+        const firstOption = menu.querySelector(".model-option");
+        if (firstOption) {
+          event.preventDefault();
+          firstOption.click();
+        }
+      }
+    });
+  }
+  document.addEventListener("pointerdown", (event) => {
+    if (!(event.target instanceof Element) || !event.target.closest(".model-input-wrap")) closeAllModelMenus();
+  });
+  byId("openai-api-key").addEventListener("input", (event) => {
+    if (event.target.value) invalidateModelOptions("openai");
+    const configured = Boolean(state.modelSettings?.providers.openai.api_key_configured);
+    byId("openai-key-state").textContent = event.target.value
+      ? configured ? "新密钥待保存" : "输入后保存"
+      : configured ? "已保存，留空沿用" : "未配置";
+  });
   byId("mobile-brand").addEventListener("click", () => byId("sidebar").classList.toggle("is-open"));
   let sidebarCollapsed = false;
   try {
@@ -1825,6 +2156,11 @@ function wireEvents() {
     setSidebarCollapsed(!document.querySelector(".app-shell").classList.contains("is-sidebar-collapsed"));
   });
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && ["openai", "ollama"].some((provider) => !byId(`${provider}-model-options`).classList.contains("is-hidden"))) {
+      closeAllModelMenus();
+      event.preventDefault();
+      return;
+    }
     if (event.key === "Escape" && jumpNav.classList.contains("is-open")) {
       event.preventDefault();
       jumpPinned = false;

@@ -3,8 +3,7 @@
   const DATABASE_VERSION = 1;
   const STORE_NAME = "workspace";
   const STATE_KEY = "main";
-  const DIMENSION_NAMES = ["目标清晰度", "背景完整度", "约束覆盖度", "输出要求明确度"];
-  const runtimeKeys = { openai: "" };
+  const DIMENSION_NAMES = ["目标清晰度", "背景完整度", "受众与场景适配度", "约束覆盖度", "输出要求明确度", "可执行性与验收标准"];
   let databasePromise;
 
   const makeError = (message, status = 502) => {
@@ -18,12 +17,51 @@
       sessions: [],
       settings: {
         provider: "openai",
+        workflow_models: {
+          interview: { provider: "", model: "" },
+          generation: { provider: "", model: "" },
+        },
         providers: {
-          openai: { model: "gpt-4o-mini", base_url: "" },
+          openai: { model: "gpt-4o-mini", base_url: "", api_key: "" },
           ollama: { model: "qwen2.5:7b", base_url: "http://127.0.0.1:11434" },
         },
       },
     };
+  }
+
+  function normalizeWorkflowChoice(choice) {
+    if (typeof choice === "string") return { provider: "", model: choice.trim() };
+    const provider = choice?.provider === "openai" || choice?.provider === "ollama" ? choice.provider : "";
+    return { provider, model: String(choice?.model || "").trim() };
+  }
+
+  function modelChoiceForWorkflow(settings, workflow) {
+    const choice = normalizeWorkflowChoice(settings.workflow_models?.[workflow]);
+    const provider = choice.provider || settings.provider;
+    return {
+      provider,
+      model: choice.model || settings.providers[provider].model,
+    };
+  }
+
+  function normalizeState(value) {
+    const defaults = defaultState();
+    const state = { ...defaults, ...(value || {}) };
+    const savedSettings = value?.settings || {};
+    state.settings = { ...defaults.settings, ...savedSettings };
+    state.settings.providers = { ...defaults.settings.providers, ...(savedSettings.providers || {}) };
+    for (const provider of ["openai", "ollama"]) {
+      state.settings.providers[provider] = {
+        ...defaults.settings.providers[provider],
+        ...(savedSettings.providers?.[provider] || {}),
+      };
+    }
+    state.settings.workflow_models = {
+      interview: normalizeWorkflowChoice(savedSettings.workflow_models?.interview),
+      generation: normalizeWorkflowChoice(savedSettings.workflow_models?.generation),
+    };
+    state.sessions = Array.isArray(value?.sessions) ? value.sessions : [];
+    return state;
   }
 
   function openDatabase() {
@@ -49,7 +87,7 @@
   function readLocalFallback() {
     try {
       const saved = window.localStorage.getItem("prompt-refiner-browser-state");
-      return saved ? { ...defaultState(), ...JSON.parse(saved) } : defaultState();
+      return normalizeState(saved ? JSON.parse(saved) : null);
     } catch {
       return defaultState();
     }
@@ -61,7 +99,7 @@
       return await new Promise((resolve, reject) => {
         const transaction = database.transaction(STORE_NAME, "readonly");
         const request = transaction.objectStore(STORE_NAME).get(STATE_KEY);
-        request.onsuccess = () => resolve(request.result ? { ...defaultState(), ...request.result } : defaultState());
+        request.onsuccess = () => resolve(normalizeState(request.result));
         request.onerror = () => reject(request.error || new Error("无法读取本地数据"));
       });
     } catch {
@@ -95,20 +133,28 @@
       providers[provider] = {
         model: config.model,
         base_url: config.base_url,
-        api_key_configured: provider === "openai" && Boolean(runtimeKeys.openai),
+        api_key_configured: provider === "openai" && Boolean(config.api_key),
       };
     }
-    return { provider: state.settings.provider, providers };
+    return {
+      provider: state.settings.provider,
+      providers,
+      workflow_models: {
+        interview: normalizeWorkflowChoice(state.settings.workflow_models?.interview),
+        generation: normalizeWorkflowChoice(state.settings.workflow_models?.generation),
+      },
+    };
   }
 
   function providerSettings(payload, state) {
     const provider = payload.provider === "ollama" ? "ollama" : "openai";
     const saved = state.settings.providers[provider];
+    const enteredApiKey = String(payload.api_key || "").trim();
     return {
       provider,
       model: String(payload.model || saved.model || "").trim(),
       baseUrl: String(payload.base_url || saved.base_url || "").trim(),
-      apiKey: String(payload.api_key || runtimeKeys.openai || "").trim(),
+      apiKey: enteredApiKey || String(saved.api_key || "").trim(),
     };
   }
 
@@ -156,13 +202,15 @@
   }
 
   async function invokeModelJson(systemPrompt, userPrompt, state, options = {}) {
-    const provider = state.settings.provider;
+    const workflowChoice = options.workflow ? modelChoiceForWorkflow(state.settings, options.workflow) : null;
+    const provider = workflowChoice?.provider || state.settings.provider;
     const config = state.settings.providers[provider];
-    const model = String(config.model || "").trim();
+    const model = String(options.model || workflowChoice?.model || config.model || "").trim();
     const baseUrl = config.base_url || "";
     if (!model) throw makeError("请先在模型设置中填写模型名称。", 502);
-    if (provider === "openai" && !runtimeKeys.openai) {
-      throw makeError("尚未配置 API Key。请在模型设置中填写临时密钥；密钥只保留在当前浏览器页面内存中，刷新后需要重新填写。", 502);
+    const apiKey = provider === "openai" ? String(config.api_key || "").trim() : "";
+    if (provider === "openai" && !apiKey) {
+      throw makeError("尚未配置 API Key。请在模型设置中输入密钥并应用设置，然后重试。", 502);
     }
 
     const controller = new AbortController();
@@ -193,7 +241,7 @@
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${runtimeKeys.openai}`,
+          Authorization: `Bearer ${apiKey}`,
         },
         signal: controller.signal,
         body: JSON.stringify({
@@ -304,7 +352,7 @@
       上一版提示词: currentVersion?.prompt || null,
       上一版改进说明: currentVersion?.improvement_notes || null,
     };
-    const result = await invokeModelJson(systemPrompt, JSON.stringify(payload), state);
+    const result = await invokeModelJson(systemPrompt, JSON.stringify(payload), state, { workflow: "interview" });
     const question = typeof result.question === "string" ? result.question.trim() : "";
     const statusNote = typeof result.status_note === "string" ? result.status_note.trim() : "";
     if (result.question !== undefined && typeof result.question !== "string") throw makeError("模型返回的追问格式不正确，请重试；当前会话内容已保留。", 502);
@@ -339,7 +387,7 @@
       当前问题: question.content,
       候选选项: choices,
     };
-    const result = await invokeModelJson(systemPrompt, JSON.stringify(payload), state, { outputTokens: 100 });
+    const result = await invokeModelJson(systemPrompt, JSON.stringify(payload), state, { outputTokens: 100, workflow: "interview" });
     const recommendation = typeof result.recommended_answer === "string" ? result.recommended_answer.trim() : "";
     if (!choices.includes(recommendation)) throw makeError("模型暂时没有选出有效的推荐项；你仍可照常选择或补充回答。", 502);
     question.recommended_answer = recommendation;
@@ -349,11 +397,12 @@
 
   async function generateVersion(state, session) {
     const currentVersion = latestVersion(session);
+    const generationModel = modelChoiceForWorkflow(state.settings, "generation");
     const systemPrompt = `你是提示词编辑与评估助手。请根据原始需求、用户回答和反馈，写出可直接复制使用的完整提示词，并进行诚实、克制的质量评分。
 提示词应保留用户原意，将已经提供的上下文、约束、目标和输出要求写清楚；不要虚构用户没有提供的事实。信息不足时把必要细节转化为提示词中的待补充占位符。
 输出提示词时使用用户原始需求的主要语言。评分和改进说明使用中文。
-总分范围 0 到 100。维度必须严格包含：目标清晰度、背景完整度、约束覆盖度、输出要求明确度；每项给 0 到 100 分及一句依据。改进说明简述本版做了哪些完善以及仍可补充什么。
-只返回 JSON 对象，格式为：{"prompt":"完整提示词","overall_score":80,"dimensions":[{"name":"目标清晰度","score":80,"note":"评分依据"},{"name":"背景完整度","score":70,"note":"评分依据"},{"name":"约束覆盖度","score":75,"note":"评分依据"},{"name":"输出要求明确度","score":70,"note":"评分依据"}],"improvement_notes":"完善说明和仍可补充的内容"}
+总分范围 0 到 100。评分维度必须严格包含：目标清晰度、背景完整度、受众与场景适配度、约束覆盖度、输出要求明确度、可执行性与验收标准；每项给 0 到 100 分及一句依据。改进说明简述本版做了哪些完善以及仍可补充什么。
+只返回 JSON 对象，格式为：{"prompt":"完整提示词","overall_score":80,"dimensions":[{"name":"目标清晰度","score":80,"note":"评分依据"},{"name":"背景完整度","score":70,"note":"评分依据"},{"name":"受众与场景适配度","score":75,"note":"评分依据"},{"name":"约束覆盖度","score":75,"note":"评分依据"},{"name":"输出要求明确度","score":70,"note":"评分依据"},{"name":"可执行性与验收标准","score":72,"note":"评分依据"}],"improvement_notes":"完善说明和仍可补充的内容"}
 不要返回 Markdown 围栏或 JSON 以外的说明。`;
     const payload = {
       原始需求: session.original_request,
@@ -365,7 +414,7 @@
         improvement_notes: currentVersion.improvement_notes,
       } : null,
     };
-    const result = await invokeModelJson(systemPrompt, JSON.stringify(payload), state);
+    const result = await invokeModelJson(systemPrompt, JSON.stringify(payload), state, { workflow: "generation" });
     const prompt = typeof result.prompt === "string" ? result.prompt.trim() : "";
     if (!prompt) throw makeError("模型没有返回提示词，请点击重试；当前会话内容已保留。", 502);
     const overallScore = clampScore(result.overall_score, 0);
@@ -392,6 +441,7 @@
       improvement_notes: String(notes),
       created_at: new Date().toISOString(),
       source_message_id: session.messages.reduce((maximum, item) => Math.max(maximum, Number(item.id) || 0), 0),
+      generation_model: generationModel,
     };
     session.versions.unshift(version);
     session.updated_at = version.created_at;
@@ -427,22 +477,20 @@
         provider: settings.provider,
         providers: {
           ...state.settings.providers,
-          [settings.provider]: { model: settings.model, base_url: settings.baseUrl },
+          [settings.provider]: {
+            model: settings.model,
+            base_url: settings.baseUrl,
+            ...(settings.provider === "openai" ? { api_key: settings.apiKey } : {}),
+          },
         },
       },
     };
-    const previousKey = runtimeKeys.openai;
-    if (settings.provider === "openai") runtimeKeys.openai = settings.apiKey;
-    try {
-      await invokeModelJson(
-        "你正在执行连接测试。只返回 JSON 对象：{\"status\":\"ok\"}",
-        "请确认连接并返回指定 JSON。",
-        temporaryState,
-        { timeout: 30000, outputTokens: 32 },
-      );
-    } finally {
-      runtimeKeys.openai = previousKey;
-    }
+    await invokeModelJson(
+      "你正在执行连接测试。只返回 JSON 对象：{\"status\":\"ok\"}",
+      "请确认连接并返回指定 JSON。",
+      temporaryState,
+      { timeout: 30000, outputTokens: 32 },
+    );
     return { message: `模型「${settings.model}」可以正常调用。` };
   }
 
@@ -467,8 +515,16 @@
         if (incoming.model && String(incoming.model).trim()) current.model = String(incoming.model).trim();
         if (incoming.base_url !== undefined) current.base_url = String(incoming.base_url || "").trim();
         if (name === "openai") {
-          if (incoming.clear_api_key) runtimeKeys.openai = "";
-          else if (incoming.api_key && String(incoming.api_key).trim()) runtimeKeys.openai = String(incoming.api_key).trim();
+          if (incoming.clear_api_key) current.api_key = "";
+          else if (incoming.api_key && String(incoming.api_key).trim()) current.api_key = String(incoming.api_key).trim();
+        }
+      }
+      if (payload.workflow_models && typeof payload.workflow_models === "object") {
+        state.settings.workflow_models = { ...state.settings.workflow_models };
+        for (const workflow of ["interview", "generation"]) {
+          if (Object.prototype.hasOwnProperty.call(payload.workflow_models, workflow)) {
+            state.settings.workflow_models[workflow] = normalizeWorkflowChoice(payload.workflow_models[workflow]);
+          }
         }
       }
       await writeState(state);
