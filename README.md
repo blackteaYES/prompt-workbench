@@ -1,6 +1,6 @@
-# 提示词完善工作台
+# Prompt Workbench · 提示词工作台
 
-主应用是一个纯浏览器端的提示词访谈与迭代工具。它会逐个询问需求细节；只有手动点击生成按钮后才生成提示词。页面使用原生 HTML、CSS 和 JavaScript，不需要 Python 后端或依赖安装。
+Prompt Workbench 是一个纯浏览器端的提示词访谈与迭代工具。它会逐个询问需求细节；只有手动点击生成按钮后才生成提示词。页面使用原生 HTML、CSS 和 JavaScript，不需要 Python 后端或依赖安装。
 
 ## 启动
 
@@ -28,7 +28,7 @@ python -m http.server 8001 --directory static
 
 新评分按目标清晰度、背景完整度、受众与场景适配度、约束覆盖度、输出要求明确度、可执行性与验收标准六项评估。历史版本保留生成时保存的评分维度，不会被新维度改写。单独评分保存在该版本的评分记录中，包含模型、时间、评分依据和改进建议；不会改写提示词或覆盖原评分。仅生成提示词的版本显示“待评分”。
 
-`demo/` 是独立的宝可梦图鉴原型，不属于主应用。需要刷新图鉴数据时，才在 `demo/` 中运行 `python sync_pokemon.py`；该脚本会重建生成数据。
+此仓库仅包含提示词工作台，不包含独立演示项目或浏览器本地数据。
 
 ## 界面与阅读
 
@@ -46,4 +46,15 @@ python -m http.server 8001 --directory static
 - `static/styles.css`：页面样式
 - `static/app.js`：界面交互
 - `static/browser-api.js`：浏览器存储及模型服务调用
-- `demo/`：独立原型和数据工具
+
+## 连接 GitHub
+
+建议仓库名称使用 `prompt-workbench`，默认分支为 `main`。在 GitHub 创建空仓库，创建时不勾选初始化 README、许可证或 .gitignore，然后在本项目目录执行：
+
+```powershell
+cd E:\demo\github-items\prompt-workbench
+git remote add origin https://github.com/你的用户名/prompt-workbench.git
+git push -u origin main
+```
+
+将地址中的用户名替换为自己的 GitHub 用户名。此项目无需构建，主页面入口为 `static/index.html`。API Key 和访谈记录保存在浏览器中，不属于 Git 提交内容。
