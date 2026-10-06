@@ -1,6 +1,6 @@
 # 仓库协作指南
 
-项目名称为 Prompt Workbench（提示词工作台），仓库目录为 `prompt-workbench`，默认分支为 `main`。
+项目名称为 Prompt Workbench（提示词工作台），仓库目录为 `prompt-workbench`，默认分支为 `main`。远程仓库为 `https://github.com/blackteaYES/prompt-workbench.git`。
 
 ## 项目结构
 
@@ -34,6 +34,8 @@ python -m http.server 8001 --directory static
 ## 验证与提交
 
 仓库没有配置自动化测试框架。界面或模型流程变更后，按改动范围在浏览器中手动检查；模型调用需要可用的服务和正确的跨域配置。提交说明应简短并限定范围，例如：`修复：调整回答选项间距`。界面改动请附截图并说明验证步骤。
+
+提交身份使用本仓库的本地 Git 配置：`blacktea <1520688026@qq.com>`。修改身份时只使用 `git config --local`，不得修改全局配置或其他仓库。提交前确认工作区和暂存内容，推送目标为 `origin/main`；没有明确授权时不要改写已推送历史或强制推送。
 
 ## 配置与数据安全
 

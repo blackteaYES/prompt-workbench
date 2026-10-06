@@ -47,14 +47,24 @@ python -m http.server 8001 --directory static
 - `static/app.js`：界面交互
 - `static/browser-api.js`：浏览器存储及模型服务调用
 
-## 连接 GitHub
+## GitHub 仓库与协作
 
-建议仓库名称使用 `prompt-workbench`，默认分支为 `main`。在 GitHub 创建空仓库，创建时不勾选初始化 README、许可证或 .gitignore，然后在本项目目录执行：
+仓库地址：[blackteaYES/prompt-workbench](https://github.com/blackteaYES/prompt-workbench)，默认分支为 `main`。获取源码：
 
 ```powershell
-cd E:\demo\github-items\prompt-workbench
-git remote add origin https://github.com/你的用户名/prompt-workbench.git
-git push -u origin main
+git clone https://github.com/blackteaYES/prompt-workbench.git
+cd prompt-workbench
 ```
 
-将地址中的用户名替换为自己的 GitHub 用户名。此项目无需构建，主页面入口为 `static/index.html`。API Key 和访谈记录保存在浏览器中，不属于 Git 提交内容。
+在已经连接远程仓库的本机目录提交更新：
+
+```powershell
+git status
+git add README.md AGENTS.md static
+git commit -m "文档：更新项目说明"
+git push origin main
+```
+
+推送需要有该仓库写入权限的 GitHub 身份。贡献者应使用自己的提交身份；如需调整，只使用 `git config --local user.name` 和 `git config --local user.email`，不要修改全局配置。不要提交 `demo/`、API Key 或浏览器本地数据。
+
+项目无需构建或再次运行 `git init`，页面入口为 `static/index.html`。GitHub 仓库保存代码；网页部署需另行配置静态托管。
