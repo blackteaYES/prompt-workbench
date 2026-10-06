@@ -22,11 +22,20 @@ const state = {
   conversationThinkingTimer: null,
   conversationThinkingStartedAt: 0,
   suppressAutoRetry: false,
+  renderedSessionId: null,
   toastTimer: null
 };
 
 const byId = (id) => document.getElementById(id);
 const QUESTION_JUMP_TICK_LIMIT = 12;
+
+function revealElement(element, delay = 0) {
+  if (!element || typeof element.animate !== "function" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  element.animate([
+    { opacity: 0, transform: "translateY(8px)" },
+    { opacity: 1, transform: "translateY(0)" },
+  ], { duration: 340, delay, easing: "cubic-bezier(.22,1,.36,1)", fill: "backwards" });
+}
 
 class ApiError extends Error {
   constructor(message, status) {
@@ -703,6 +712,8 @@ function makeMessage(message, options = {}) {
   const wrapper = document.createElement("article");
   const speaker = message.role === "user" ? "user" : "assistant";
   wrapper.className = `message ${speaker}${message.kind === "question" ? " is-question" : ""}${message.kind === "notice" ? " is-notice" : ""}`;
+  wrapper.dataset.messageId = String(message.id);
+  if (options.isNew) wrapper.classList.add("is-new");
   if (speaker === "assistant" && message.kind === "question") wrapper.dataset.questionId = String(message.id);
   const avatar = document.createElement("div");
   avatar.className = "message-avatar";
@@ -714,7 +725,8 @@ function makeMessage(message, options = {}) {
   const name = document.createElement("strong");
   name.textContent = speaker === "user" ? (message.kind === "feedback" ? "你的修改意见" : "你") : (message.kind === "notice" ? "梳理提示" : "需求访谈员");
   const isUserAnswer = speaker === "user" && message.kind === "answer";
-  if (!isUserAnswer) meta.append(name);
+  if (!isUserAnswer && speaker !== "user") meta.append(name);
+  else if (message.kind === "feedback") meta.append(name);
   if (Number.isInteger(options.questionNumber)) {
     const round = document.createElement("span");
     round.className = "message-round-number";
@@ -757,6 +769,7 @@ function makeMessage(message, options = {}) {
       editButton.addEventListener("click", () => {
         const isOpen = !editor.classList.contains("is-hidden");
         editor.classList.toggle("is-hidden", isOpen);
+        if (!isOpen) revealElement(editor);
         editButton.textContent = isOpen ? "修改回答" : "收起修改";
         editButton.setAttribute("aria-expanded", String(!isOpen));
       });
@@ -1082,6 +1095,9 @@ function renderWorkspace() {
     : "每轮回答一个问题；选项可多选，也能补充文字。提交一条回答后即可手动生成第一版。";
 
   const messageList = byId("message-list");
+  // 仅新收到的消息入场，更新模型或界面时不重播历史对话。
+  const sameSession = state.renderedSessionId === session.id;
+  const previousMessageIds = new Set([...messageList.children].map((node) => node.dataset.messageId));
   const questionOrdinalById = new Map();
   session.messages.forEach((message) => {
     if (message.role === "assistant" && message.kind === "question") {
@@ -1099,11 +1115,13 @@ function renderWorkspace() {
       questionNumber = questionOrdinalById.get(String(message.question_id)) || answerOrdinal;
     }
     return makeMessage(message, {
+      isNew: sameSession && !previousMessageIds.has(String(message.id)),
       questionNumber,
       isActiveQuestion: isActiveQuestion && isCurrentMessage,
       isFeedbackMode: feedbackMode && isCurrentMessage,
     });
   }));
+  state.renderedSessionId = session.id;
   renderQuestionJump(session.messages);
   const scroll = byId("conversation-scroll");
   window.requestAnimationFrame(() => {
@@ -1187,8 +1205,10 @@ function renderWorkspace() {
 }
 function updateScoreCollapse() {
   const collapsed = state.scoreCollapsed;
+  const wasHidden = byId("score-card-body").hidden;
   byId("score-card").classList.toggle("is-collapsed", collapsed);
   byId("score-card-body").hidden = collapsed;
+  if (wasHidden && !collapsed) revealElement(byId("score-card-body"));
   byId("score-collapse-button").textContent = collapsed ? "展开" : "收起";
   byId("score-collapse-button").setAttribute("aria-expanded", String(!collapsed));
   byId("score-collapsed-summary").textContent = `${byId("overall-score").textContent}/100`;
@@ -1197,8 +1217,10 @@ function updateScoreCollapse() {
 
 function updateHistoryCollapse() {
   const collapsed = state.historyCollapsed;
+  const wasHidden = byId("version-history-body").hidden;
   byId("version-history").classList.toggle("is-collapsed", collapsed);
   byId("version-history-body").hidden = collapsed;
+  if (wasHidden && !collapsed) revealElement(byId("version-history-body"));
   byId("version-history-toggle").textContent = collapsed ? "展开" : "收起";
   byId("version-history-toggle").setAttribute("aria-expanded", String(!collapsed));
   const count = state.session?.versions?.length || 0;
@@ -1208,6 +1230,10 @@ function updateHistoryCollapse() {
 
 function renderVersionPanel(version) {
   if (!version) return;
+  const resultContent = byId("result-content");
+  const versionKey = `${state.session.id}:${version.id}`;
+  const versionChanged = resultContent.dataset.versionKey !== versionKey;
+  resultContent.dataset.versionKey = versionKey;
   byId("overall-score").textContent = String(version.overall_score);
   byId("score-stamp").textContent = `V${String(version.revision).padStart(2, "0")}`;
   byId("prompt-version-number").textContent = String(version.revision).padStart(2, "0");
@@ -1233,6 +1259,14 @@ function renderVersionPanel(version) {
     score.textContent = String(item.score);
     row.title = item.note || "";
     row.append(name, score);
+    const track = document.createElement("span");
+    track.className = "dimension-track";
+    track.setAttribute("aria-hidden", "true");
+    const fill = document.createElement("span");
+    fill.className = "dimension-fill";
+    fill.style.width = `${Math.max(0, Math.min(100, Number(item.score) || 0))}%`;
+    track.append(fill);
+    row.append(track);
     dimensions.append(row);
   }
 
@@ -1321,6 +1355,16 @@ function renderVersionPanel(version) {
       renderVersionPanel(item);
     });
     versionList.append(button);
+  }
+  if (versionChanged) {
+    revealElement(document.querySelector(".prompt-card"));
+    revealElement(byId("score-card"), 70);
+    revealElement(document.querySelector(".notes-card"), 120);
+    for (const fill of dimensions.querySelectorAll(".dimension-fill")) {
+      if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches && typeof fill.animate === "function") {
+        fill.animate([{ transform: "scaleX(0)" }, { transform: "scaleX(1)" }], { duration: 650, easing: "cubic-bezier(.22,1,.36,1)" });
+      }
+    }
   }
 }
 
@@ -1955,7 +1999,8 @@ async function copyPrompt() {
   for (const buttonId of ["copy-button", "prompt-modal-copy-button"]) {
     const button = byId(buttonId);
     button.textContent = "已复制";
-    window.setTimeout(() => { button.textContent = "复制"; }, 1600);
+    button.classList.add("is-copied");
+    window.setTimeout(() => { button.textContent = "复制"; button.classList.remove("is-copied"); }, 1600);
   }
 }
 
@@ -2005,14 +2050,25 @@ function wireEvents() {
   const focusDialog = byId("focus-dialog");
   const focusContent = byId("focus-dialog-content");
   let focusedPanelInfo = null;
+  const keepPanelScroll = (panel) => {
+    const positions = [panel, ...panel.querySelectorAll(".conversation-scroll, .composer-dock, .quick-replies-list, .prompt-text")].map((node) => ({
+      node,
+      top: node.scrollTop,
+      atEnd: node.scrollHeight > node.clientHeight && node.scrollHeight - node.clientHeight - node.scrollTop < 2,
+    }));
+    return () => window.requestAnimationFrame(() => {
+      for (const { node, top, atEnd } of positions) node.scrollTop = atEnd ? node.scrollHeight : top;
+    });
+  };
   const restoreFocusedPanel = () => {
     if (!focusedPanelInfo) return;
-    const { panel, placeholder } = focusedPanelInfo;
+    const { panel, placeholder, restoreScroll } = focusedPanelInfo;
     panel.classList.remove("is-focus-expanded");
     if (placeholder.parentNode) placeholder.parentNode.insertBefore(panel, placeholder);
     placeholder.remove();
     focusContent.replaceChildren();
     focusedPanelInfo = null;
+    restoreScroll();
   };
   const openFocusedPanel = (panelId, title) => {
     if (focusedPanelInfo) return;
@@ -2022,20 +2078,31 @@ function wireEvents() {
       return;
     }
     const placeholder = document.createComment("原面板位置");
+    const restoreScroll = keepPanelScroll(panel);
     panel.parentNode.insertBefore(placeholder, panel);
-    focusedPanelInfo = { panel, placeholder };
+    focusedPanelInfo = { panel, placeholder, restoreScroll };
     panel.classList.add("is-focus-expanded");
     focusContent.append(panel);
     byId("focus-dialog-title").textContent = title;
     focusDialog.showModal();
-    byId("focus-dialog-close").focus();
+    byId("focus-dialog-close").focus({ preventScroll: true });
+    restoreScroll();
   };
   byId("conversation-zoom-button").addEventListener("click", () => openFocusedPanel("conversation-column", "需求对话"));
   byId("result-zoom-button").addEventListener("click", () => openFocusedPanel("result-column", "提示词结果与评分"));
-  byId("focus-dialog-close").addEventListener("click", () => focusDialog.close());
+  const rememberFocusedScroll = () => {
+    if (focusedPanelInfo) focusedPanelInfo.restoreScroll = keepPanelScroll(focusedPanelInfo.panel);
+  };
+  const closeFocusedPanel = () => {
+    // 弹窗关闭后其滚动区域已不可见，必须在关闭前记录阅读位置。
+    rememberFocusedScroll();
+    focusDialog.close();
+  };
+  byId("focus-dialog-close").addEventListener("click", closeFocusedPanel);
+  focusDialog.addEventListener("cancel", rememberFocusedScroll);
   focusDialog.addEventListener("close", restoreFocusedPanel);
   focusDialog.addEventListener("click", (event) => {
-    if (event.target === focusDialog) focusDialog.close();
+    if (event.target === focusDialog) closeFocusedPanel();
   });
 
   const jumpNav = byId("question-jump-nav");

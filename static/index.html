@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f2ec">
   <title>提示词完善工作台</title>
-  <link rel="stylesheet" href="styles.css?v=26">
+  <link rel="stylesheet" href="styles.css?v=27">
   <script src="browser-api.js?v=23" defer></script>
-  <script src="app.js?v=26" defer></script>
+  <script src="app.js?v=27" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -85,7 +85,7 @@
           <button class="example-chip" data-example="帮我制定一个适合初学者的 8 周跑步计划。" type="button">制定一个计划</button>
         </div>
 
-        <div class="welcome-footer"><span>01 / 理清目标</span><span>02 / 补足上下文</span><span>03 / 生成并评分</span></div>
+        <div class="welcome-footer"><span>01 · 说说想法</span><span>02 · 逐问完善</span><span>03 · 生成提示词</span></div>
       </section>
 
       <section class="workspace-view is-hidden" id="workspace-view">
@@ -131,7 +131,7 @@
           </section>
 
           <aside class="result-column" id="result-column" aria-label="提示词结果与评分">
-            <div class="result-topline"><span>提示词结果</span><div class="result-topline-actions"><span id="version-count">尚未生成</span><button class="panel-zoom-button is-hidden" id="result-zoom-button" type="button" aria-haspopup="dialog"><span class="button-icon" aria-hidden="true">⤢</span>放大结果</button></div></div>
+            <div class="result-topline"><span>提示词与评估</span><div class="result-topline-actions"><span id="version-count">尚未生成</span><button class="panel-zoom-button is-hidden" id="result-zoom-button" type="button" aria-haspopup="dialog"><span class="button-icon" aria-hidden="true">⤢</span>放大结果</button></div></div>
             <section class="generation-action" id="generation-action" aria-live="polite">
               <div class="generation-action-heading"><span class="generation-action-mark" aria-hidden="true">✳</span><div><span class="eyebrow">下一步</span><strong id="generate-heading">先回答第一个问题</strong></div></div>
               <p id="generate-caption">回答并提交后，这里才会开放第一版生成。</p>
@@ -147,6 +147,12 @@
             </div>
 
             <div class="result-content is-hidden" id="result-content">
+              <div class="prompt-card">
+                <div class="prompt-card-head"><div><span class="eyebrow">可直接使用</span><h2>完善后的提示词</h2></div><div class="prompt-actions"><button class="expand-preview-button" id="expand-prompt-preview" type="button" aria-haspopup="dialog"><span class="button-icon" aria-hidden="true">⤢</span>放大预览</button><div class="prompt-view-switch" role="group" aria-label="提示词显示方式"><button id="prompt-preview-button" class="is-selected" type="button" aria-pressed="true">预览</button><button id="prompt-source-button" type="button" aria-pressed="false">Markdown</button></div><button class="copy-button" id="copy-button" type="button" aria-label="复制提示词">复制</button></div></div>
+                <div class="prompt-text markdown-preview" id="prompt-text" aria-live="polite"></div>
+                <div class="prompt-card-foot"><span>版本 <b id="prompt-version-number">01</b></span><span id="prompt-created-at"></span></div>
+              </div>
+
               <div class="score-card" id="score-card">
               <div class="score-card-top"><span>质量评分 <i>模型评估，仅供参考</i><b class="score-collapsed-summary is-hidden" id="score-collapsed-summary"></b></span><div class="score-card-actions"><span class="score-stamp" id="score-stamp">V01</span><button class="section-collapse-button" id="score-collapse-button" type="button" aria-expanded="true" aria-controls="score-card-body">收起</button></div></div>
                 <div id="score-card-body">
@@ -166,12 +172,6 @@
                     </dl>
                   </details>
                 </div>
-              </div>
-
-              <div class="prompt-card">
-                <div class="prompt-card-head"><div><span class="eyebrow">可直接使用</span><h2>完善后的提示词</h2></div><div class="prompt-actions"><button class="expand-preview-button" id="expand-prompt-preview" type="button" aria-haspopup="dialog"><span class="button-icon" aria-hidden="true">⤢</span>放大预览</button><div class="prompt-view-switch" role="group" aria-label="提示词显示方式"><button id="prompt-preview-button" class="is-selected" type="button" aria-pressed="true">预览</button><button id="prompt-source-button" type="button" aria-pressed="false">Markdown</button></div><button class="copy-button" id="copy-button" type="button" aria-label="复制提示词">复制</button></div></div>
-                <div class="prompt-text markdown-preview" id="prompt-text" aria-live="polite"></div>
-                <div class="prompt-card-foot"><span>版本 <b id="prompt-version-number">01</b></span><span id="prompt-created-at"></span></div>
               </div>
 
               <div class="notes-card"><div class="notes-heading"><span class="notes-mark">↗</span><strong>完善说明</strong></div><p id="improvement-notes"></p></div>
