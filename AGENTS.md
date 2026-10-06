@@ -4,24 +4,26 @@
 
 ## 项目结构
 
-- `static/` 是主应用：`index.html` 为页面，`styles.css` 为样式，`app.js` 管理界面交互，`browser-api.js` 负责 IndexedDB 持久化和模型 API 调用。
+- 根目录 `index.html` 为页面入口；`assets/css/styles.css` 管理样式，`assets/js/app.js` 管理界面交互，`assets/js/browser-api.js` 负责 IndexedDB 持久化和模型 API 调用。
 - 工作区分别保存访谈、生成和评审模型选择；修改浏览器设置结构时，应在 `browser-api.js` 的状态规范化逻辑中兼容已有数据。
 - 访谈结束后允许手动生成首版；已有版本仅在新回答、新反馈或生成模型切换后开放下一版，界面应说明当前版本已覆盖现有需求的原因。
 - 当前提示词评分为六项维度；展示历史版本时应使用其已保存维度，不要把旧评分迁移成新维度。
 - 仅生成提示词的版本使用 `overall_score: null` 和空维度表示待评分。独立评审追加到版本的 `evaluations`，保留模型与时间；不覆盖提示词或原始评分。模型等待后保存结果前应读取最新状态，保留期间的设置和回答修改。
 - 本仓库仅包含主应用；不要提交 `demo/`、个人配置或本机数据。
-- `README.md` 说明本机使用、模型连接和浏览器数据行为。
+- `README.md` 说明功能、本机使用、模型连接与 Cloudflare Pages 部署；在线体验地址为 `https://prompt-workbench-3xc.pages.dev/`。`docs/images/` 保存文档介绍图片和界面截图，如添加 AI 总览应与真实截图明确区分，不含密钥或个人配置。
 - 主应用没有 Python 后端、依赖清单或自动化测试目录。
 
 ## 本地运行
 
-可直接打开 `static/index.html`。如需稳定的网页来源，可在仓库根目录运行静态文件服务器：
+可直接打开 `index.html`。如需稳定的网页来源，可在仓库根目录运行静态文件服务器：
 
 ```powershell
-python -m http.server 8001 --directory static
+python -m http.server 8001 --bind 127.0.0.1
 ```
 
 浏览器访问 `http://127.0.0.1:8001`。该命令只提供静态文件。模型请求从浏览器直连 OpenAI 兼容服务或 Ollama；服务端需要允许该网页来源跨域访问。
+
+Cloudflare Pages 发布仓库根目录：构建命令 `exit 0`、输出目录 `.`、生产分支 `main`。已有部署须把输出目录从 `static` 改为 `.` 后重新部署。HTML 使用相对路径加载资源；先加载 `assets/js/browser-api.js`，再加载 `assets/js/app.js`，保留 `defer` 与原生脚本方式。
 
 ## 代码风格
 
