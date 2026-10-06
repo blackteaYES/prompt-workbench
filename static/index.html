@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f2ec">
   <title>提示词完善工作台</title>
-  <link rel="stylesheet" href="styles.css?v=27">
-  <script src="browser-api.js?v=23" defer></script>
-  <script src="app.js?v=27" defer></script>
+  <link rel="stylesheet" href="styles.css?v=30">
+  <script src="browser-api.js?v=24" defer></script>
+  <script src="app.js?v=30" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -96,7 +96,7 @@
                 <div class="eyebrow">需求访谈 <span class="eyebrow-rule"></span> <span id="round-label">第 01 问</span></div>
                 <h1 id="session-title">工作区</h1>
                 <p class="session-subtitle" id="session-subtitle">回答问题时可多选并补充说明；生成时机由你决定。</p>
-                <label class="workflow-model-control" for="interview-model-select"><span>访谈模型</span><select class="workflow-model-select" id="interview-model-select" aria-label="选择访谈模型"></select></label>
+                <div class="workflow-model-control"><span>访谈模型</span><select id="interview-model-select" hidden aria-label="选择访谈模型"></select><button class="workflow-model-button" id="interview-model-button" type="button" aria-haspopup="dialog" aria-label="选择访谈模型"></button></div>
               </div>
               <div class="conversation-heading-actions"><button class="panel-zoom-button" id="conversation-zoom-button" type="button" aria-haspopup="dialog"><span class="button-icon" aria-hidden="true">⤢</span>放大对话</button><div class="session-state" id="session-state"><span class="state-dot"></span><span id="session-state-label">正在准备提问</span></div></div>
             </div>
@@ -131,19 +131,32 @@
           </section>
 
           <aside class="result-column" id="result-column" aria-label="提示词结果与评分">
-            <div class="result-topline"><span>提示词与评估</span><div class="result-topline-actions"><span id="version-count">尚未生成</span><button class="panel-zoom-button is-hidden" id="result-zoom-button" type="button" aria-haspopup="dialog"><span class="button-icon" aria-hidden="true">⤢</span>放大结果</button></div></div>
+            <div class="result-topline"><span>工作预览</span><div class="result-topline-actions"><span id="version-count">尚未生成</span><button class="panel-zoom-button" id="result-zoom-button" type="button" aria-haspopup="dialog"><span class="button-icon" aria-hidden="true">⤢</span>放大预览区</button></div></div>
+            <div class="workspace-tabs" role="tablist" aria-label="工作预览阶段">
+              <button id="interview-tab" type="button" role="tab" aria-controls="interview-preview" aria-selected="true">需求清单</button>
+              <button id="prompt-tab" type="button" role="tab" aria-controls="result-content" aria-selected="false">完整提示词</button>
+              <button id="evaluation-tab" type="button" role="tab" aria-controls="evaluation-action" aria-selected="false">质量评估</button>
+            </div>
+              <div class="version-history" id="version-history"><div class="version-history-head"><div><span>版本记录</span><span>历史提示词</span><b class="version-history-summary" id="version-history-summary"></b></div><button class="section-collapse-button history-collapse-button" id="version-history-toggle" type="button" aria-expanded="true" aria-controls="version-history-body">收起</button></div><div id="version-history-body"><p class="version-history-description">选择版本，查看对应的提示词与评分；历史版本保留。</p><div id="version-list"></div></div></div>
+            <section class="interview-preview" id="interview-preview" role="tabpanel" aria-labelledby="interview-tab">
+              <header><div class="preview-heading"><h2>已收集的需求</h2><span id="preview-answer-count"></span></div><div class="preview-filters" role="group" aria-label="筛选需求"><button type="button" data-preview-filter="all" aria-pressed="true">全部</button><button type="button" data-preview-filter="answered" aria-pressed="false">已回答</button><button type="button" data-preview-filter="pending" aria-pressed="false">待回答</button></div></header>
+              <div id="interview-preview-list"></div>
+            </section>
             <section class="generation-action" id="generation-action" aria-live="polite">
-              <div class="generation-action-heading"><span class="generation-action-mark" aria-hidden="true">✳</span><div><span class="eyebrow">下一步</span><strong id="generate-heading">先回答第一个问题</strong></div></div>
-              <p id="generate-caption">回答并提交后，这里才会开放第一版生成。</p>
-              <label class="workflow-model-control generation-model-control" for="generation-model-select"><span>生成与评分模型</span><select class="workflow-model-select" id="generation-model-select" aria-label="选择提示词生成与评分模型"></select></label>
-              <button class="generate-button is-hidden" id="generate-button" type="button"><span class="generate-button-mark" aria-hidden="true">✦</span><span id="generate-button-label">生成第一版并评分</span></button>
+              <div class="generation-action-heading"><span class="generation-action-mark" aria-hidden="true">✦</span><strong id="generate-heading">先回答第一个问题</strong></div>
+              <button class="generate-button is-hidden" id="generate-button" type="button" aria-haspopup="dialog"><span class="generate-button-mark" aria-hidden="true">↗</span><span id="generate-button-label">生成提示词</span></button>
               <div class="generation-progress" aria-hidden="true"><span></span></div>
+            </section>
+            <section class="evaluation-action is-hidden" id="evaluation-action" role="tabpanel" aria-labelledby="evaluation-tab">
+              <span class="eyebrow" id="evaluation-target">评估已有提示词</span>
+              <button class="primary-button" id="evaluate-button" type="button" aria-haspopup="dialog">为当前版本评分 <span aria-hidden="true">✦</span></button>
+              <p id="evaluation-status" role="status"></p>
             </section>
             <div class="empty-result" id="empty-result">
               <span class="result-empty-tag" id="empty-result-tag">尚未生成</span>
               <h2 id="empty-result-title">提示词还未生成</h2>
               <p id="empty-result-copy">生成后，提示词、评分和完善说明会显示在这里。</p>
-              <div class="score-preview"><span>生成后显示评分</span><b>—<small>/100</small></b></div>
+              <button class="secondary-button" id="return-interview-button" type="button">返回需求清单 ↗</button>
             </div>
 
             <div class="result-content is-hidden" id="result-content">
@@ -154,6 +167,7 @@
               </div>
 
               <div class="score-card" id="score-card">
+              <p class="evaluation-source" id="evaluation-source"></p><div class="evaluation-history" id="evaluation-history" aria-label="本版评分记录"></div><p class="evaluation-notes" id="evaluation-notes"></p>
               <div class="score-card-top"><span>质量评分 <i>模型评估，仅供参考</i><b class="score-collapsed-summary is-hidden" id="score-collapsed-summary"></b></span><div class="score-card-actions"><span class="score-stamp" id="score-stamp">V01</span><button class="section-collapse-button" id="score-collapse-button" type="button" aria-expanded="true" aria-controls="score-card-body">收起</button></div></div>
                 <div id="score-card-body">
                   <div class="score-number"><strong id="overall-score">—</strong><span>/ 100</span><span class="score-caption">提示词质量</span></div>
@@ -176,7 +190,6 @@
 
               <div class="notes-card"><div class="notes-heading"><span class="notes-mark">↗</span><strong>完善说明</strong></div><p id="improvement-notes"></p></div>
 
-              <div class="version-history" id="version-history"><div class="version-history-head"><div><span>版本记录</span><span>历史提示词</span><b class="version-history-summary" id="version-history-summary"></b></div><button class="section-collapse-button history-collapse-button" id="version-history-toggle" type="button" aria-expanded="true" aria-controls="version-history-body">收起</button></div><div id="version-history-body"><p class="version-history-description">每次生成都会保存一个版本。点击版本号，可查看当时的提示词和评分；旧版本会保留。</p><div id="version-list"></div></div></div>
             </div>
           </aside>
         </div>
@@ -239,6 +252,35 @@
     <div class="focus-dialog-shell">
       <header class="focus-dialog-head"><div><span class="eyebrow">专注查看</span><h2 id="focus-dialog-title">需求对话</h2></div><button class="dialog-close" id="focus-dialog-close" type="button" aria-label="关闭放大视图">×</button></header>
       <div class="focus-dialog-content" id="focus-dialog-content"></div>
+    </div>
+  </dialog>
+  <dialog class="workflow-picker-dialog settings-dialog" id="workflow-picker-dialog" aria-labelledby="workflow-picker-title">
+    <div class="settings-form">
+      <div class="dialog-heading"><div><span class="eyebrow">按用途选择</span><h2 id="workflow-picker-title">选择模型</h2></div><button class="dialog-close" id="workflow-picker-close" type="button" aria-label="关闭模型选择">×</button></div>
+      <p class="dialog-copy">从已获取的模型中选择，或自定义模型名称。不会改变其他用途的模型。</p>
+      <label class="field-label" for="workflow-model-search">搜索模型</label><input id="workflow-model-search" type="search" placeholder="输入模型名称筛选" autocomplete="off">
+      <div class="workflow-model-options" id="workflow-model-options" aria-label="可用模型"></div>
+      <details class="workflow-custom"><summary>自定义模型</summary><label class="field-label" for="workflow-custom-provider">服务</label><select id="workflow-custom-provider"><option value="openai">OpenAI 兼容</option><option value="ollama">Ollama</option></select><label class="field-label" for="workflow-custom-model">模型名称</label><input id="workflow-custom-model" placeholder="输入服务支持的模型名称"><button class="secondary-button" id="workflow-custom-apply" type="button">使用此模型</button></details>
+      <button class="text-button" id="workflow-picker-settings" type="button">管理连接与获取模型列表 ↗</button>
+    </div>
+  </dialog>
+  <dialog class="settings-dialog evaluation-confirm-dialog" id="evaluation-confirm-dialog" aria-labelledby="evaluation-confirm-title">
+    <div class="settings-form">
+      <div class="dialog-heading"><div><span class="eyebrow">独立评审</span><h2 id="evaluation-confirm-title">确认评分</h2></div><button class="dialog-close" id="evaluation-confirm-close" type="button" aria-label="关闭评分设置">×</button></div>
+      <p class="dialog-copy" id="evaluation-confirm-target"></p>
+              <div class="workflow-model-control"><span>评审模型</span><select id="evaluation-model-select" hidden aria-label="选择评审模型"></select><button class="workflow-model-button" id="evaluation-model-button" type="button" aria-haspopup="dialog" aria-label="选择评审模型"></button></div>
+      <p class="generation-confirm-tip">新评审包含六项维度；历史评分保留，可在评分记录中切换查看。</p>
+      <button class="primary-button" id="confirm-evaluation-button" type="button">确认评分 <span aria-hidden="true">✦</span></button>
+    </div>
+  </dialog>
+  <dialog class="generation-confirm-dialog settings-dialog" id="generation-confirm-dialog" aria-labelledby="generation-confirm-title">
+    <div class="settings-form">
+      <div class="dialog-heading"><div><span class="eyebrow">把需求整理成提示词</span><h2 id="generation-confirm-title">确认生成</h2></div><button class="dialog-close" id="generation-confirm-close" type="button" aria-label="关闭生成设置">×</button></div>
+      <p class="dialog-copy" id="generate-caption">核对需求后，选择本次使用的模型。</p>
+      <div class="workflow-model-control generation-model-control"><span>生成模型</span><select id="generation-model-select" hidden aria-label="选择提示词生成模型"></select><button class="workflow-model-button" id="generation-model-button" type="button" aria-haspopup="dialog" aria-label="选择提示词生成模型"></button></div>
+      <label class="include-score-control"><input id="include-generation-score" type="checkbox" checked>生成时由同一模型一起评分</label>
+      <p class="generation-confirm-tip">新版本会保留；之后还可以修改需求，或使用其他模型单独评分。</p>
+      <button class="primary-button" id="confirm-generation-button" type="button">确认生成 <span aria-hidden="true">✦</span></button>
     </div>
   </dialog>
 </body>

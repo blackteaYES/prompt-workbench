@@ -12,6 +12,15 @@ const state = {
   activeQuestionId: null,
   composerMode: null,
   promptView: "preview",
+  workspaceView: "interview",
+  previewFilter: "all",
+  previewExpanded: new Set(["context"]),
+  selectedEvaluationId: null,
+  pickerWorkflow: null,
+  generationPending: false,
+  evaluationPending: false,
+  feedbackPending: false,
+  canGenerate: false,
   modelSettings: null,
   retryMode: null,
   pendingAnswerCheck: null,
@@ -55,6 +64,13 @@ async function request(path, options = {}) {
 
 function setBusy(button, busy, label) {
   if (!button) return;
+  if (button.id === "generate-button") {
+    const labelNode = byId("generate-button-label");
+    if (busy) { button.dataset.originalLabel = labelNode.textContent; labelNode.textContent = label || "正在处理…"; }
+    else if (button.dataset.originalLabel) { labelNode.textContent = button.dataset.originalLabel; delete button.dataset.originalLabel; }
+    button.disabled = busy;
+    return;
+  }
   if (busy) {
     button.dataset.originalHtml = button.innerHTML;
     button.textContent = label || "正在处理…";
@@ -203,6 +219,11 @@ function renderSessionList() {
 
 async function loadSession(sessionId) {
   if (state.session?.id !== sessionId) {
+    state.workspaceView = "interview";
+    state.previewFilter = "all";
+    state.previewExpanded.clear();
+    state.previewExpanded.add("context");
+    state.selectedEvaluationId = null;
     state.selectedAnswerOptions = [];
     state.answerDraftQuestionId = null;
     state.answerDraftContent = "";
@@ -457,6 +478,13 @@ function createAnswerComposer(message, hasVersions) {
   form.className = "answer-composer";
   form.id = "answer-form";
   form.dataset.questionId = String(message.id || "");
+  const fields = document.createElement("div");
+  fields.className = "answer-fields";
+  form.append(fields);
+  const updateSubmit = () => {
+    const submitButton = form.querySelector('button[type="submit"]');
+    if (submitButton) submitButton.disabled = state.generationPending || state.evaluationPending || form.getAttribute("aria-busy") === "true" || (!state.selectedAnswerOptions.length && !state.answerDraftContent.trim());
+  };
 
   if (message.kind === "question") {
     const optionsBlock = document.createElement("div");
@@ -490,6 +518,7 @@ function createAnswerComposer(message, hasVersions) {
         selectedCount.textContent = state.selectedAnswerOptions.length
           ? `已选 ${state.selectedAnswerOptions.length} 项`
           : "可选择多项";
+        updateSubmit();
       });
       button.dataset.answer = answer;
       list.append(button);
@@ -511,7 +540,7 @@ function createAnswerComposer(message, hasVersions) {
       : "可选择多项";
     optionsFooter.append(hint, selectedCount);
     optionsBlock.append(label, list, optionsFooter);
-    form.append(optionsBlock);
+    fields.append(optionsBlock);
   }
 
   const label = document.createElement("label");
@@ -524,8 +553,8 @@ function createAnswerComposer(message, hasVersions) {
   input.rows = 2;
   input.placeholder = message.kind === "question" ? "可补充背景、例子，或说明所选方向…" : "写下你还想补充的内容…";
   input.value = state.answerDraftContent;
-  input.addEventListener("input", () => { state.answerDraftContent = input.value; });
-  form.append(label, input);
+  input.addEventListener("input", () => { state.answerDraftContent = input.value; updateSubmit(); });
+  fields.append(label, input);
 
   const footer = document.createElement("div");
   footer.className = "composer-bottom answer-composer-footer";
@@ -552,6 +581,7 @@ function createAnswerComposer(message, hasVersions) {
     form.append(switchMode);
   }
   form.addEventListener("submit", submitAnswer);
+  updateSubmit();
   return form;
 }
 
@@ -730,7 +760,7 @@ function makeMessage(message, options = {}) {
   if (Number.isInteger(options.questionNumber)) {
     const round = document.createElement("span");
     round.className = "message-round-number";
-    round.textContent = String(options.questionNumber);
+    round.textContent = `${speaker === "user" ? "答" : "问"} ${String(options.questionNumber).padStart(2, "0")}`;
     round.setAttribute("aria-label", speaker === "user"
       ? `第 ${options.questionNumber} 个问题的回答`
       : `第 ${options.questionNumber} 个问题`);
@@ -1052,7 +1082,9 @@ function renderWorkspace() {
       const isNewMessage = Number(latestVersion.source_message_id) > 0
         ? Number(message.id) > Number(latestVersion.source_message_id)
         : Date.parse(message.created_at) > latestVersionTime;
-      const wasEditedAfterVersion = message.edited_at && Date.parse(message.edited_at) >= latestVersionTime;
+      const wasEditedAfterVersion = message.edited_at && (latestVersion.source_updated_at
+        ? Date.parse(message.edited_at) > Date.parse(latestVersion.source_updated_at)
+        : Date.parse(message.edited_at) >= latestVersionTime);
       return isNewMessage || wasEditedAfterVersion;
     })
     : [];
@@ -1074,6 +1106,7 @@ function renderWorkspace() {
   const canGenerate = hasVersions
     ? newUserInputs.length > 0 || completionNoticeIsNew || generationModelChanged
     : answerCount > 0 || interviewFinished;
+  state.canGenerate = canGenerate;
   const feedbackMode = hasVersions && (
     (isActiveQuestion && state.composerMode === "feedback") ||
     (!isActiveQuestion && lastMessage?.role === "assistant" && lastMessage.kind === "notice")
@@ -1151,8 +1184,8 @@ function renderWorkspace() {
   const generationAction = byId("generation-action");
   const generateButton = byId("generate-button");
   generationAction.classList.toggle("is-ready", canGenerate);
-  generateButton.classList.toggle("is-hidden", !canGenerate);
-  generateButton.disabled = !canGenerate;
+  generateButton.classList.remove("is-hidden");
+  generateButton.disabled = !canGenerate || state.generationPending;
   if (canGenerate && hasVersions && newUserInputs.length > 0) {
     byId("generate-heading").textContent = "V" + String(latestVersion.revision).padStart(2, "0") + " 后有 " + newUserInputs.length + " 条信息更新";
     byId("generate-caption").textContent = "可现在按这些新回答或意见生成下一版，也可以继续回答当前问题。";
@@ -1164,7 +1197,7 @@ function renderWorkspace() {
     byId("generate-caption").textContent = "访谈员判断现有信息足够；你可以直接生成新版本，也可以提交版本意见。";
   } else if (canGenerate) {
     byId("generate-heading").textContent = "已提交 " + answerCount + " 条回答，可以生成第一版";
-    byId("generate-caption").textContent = "点击后才会生成提示词和评分；也可以继续访谈再生成。";
+    byId("generate-caption").textContent = "确认后才会生成提示词；可选择一起评分，也可以继续访谈再生成。";
   } else if (hasVersions && waitingForModel) {
     byId("generate-heading").textContent = "等本轮追问完成后再继续";
     byId("generate-caption").textContent = "如果模型没有响应，请先重试；新回答或意见保存后可生成下一版。";
@@ -1183,9 +1216,9 @@ function renderWorkspace() {
     byId("generate-caption").textContent = "访谈员判断当前信息足够；你也可以继续补充，再手动生成。";
   }
   renderWorkflowModelSelectors();
-  byId("generate-button-label").textContent = hasVersions ? "生成下一版并评分" : "生成第一版并评分";
+  byId("generate-button-label").textContent = "生成提示词";
   byId("version-count").textContent = hasVersions ? String(versions.length).padStart(2, "0") + " 个版本" : "尚未生成";
-  byId("result-zoom-button").classList.toggle("is-hidden", !hasVersions);
+  byId("result-zoom-button").classList.remove("is-hidden");
   byId("empty-result").classList.toggle("is-hidden", hasVersions);
   byId("result-content").classList.toggle("is-hidden", !hasVersions);
   if (!state.retryMode) {
@@ -1202,6 +1235,182 @@ function renderWorkspace() {
     ? "使用上方按钮生成；生成后会在这里显示提示词、评分和完善说明。"
     : "生成后会在这里显示提示词、评分和完善说明。";
   if (hasVersions) renderVersionPanel(getSelectedVersion());
+  renderInterviewPreview();
+  updateWorkspaceView();
+}
+
+function setWorkspaceView(view) {
+  const changed = state.workspaceView !== view;
+  state.workspaceView = view;
+  updateWorkspaceView();
+  byId("result-column").scrollTop = 0;
+  if (changed) revealElement(view === "interview" ? byId("interview-preview") : view === "evaluation" ? byId("evaluation-action") : byId("result-content"));
+}
+
+function updateWorkspaceView() {
+  const view = state.workspaceView;
+  document.querySelector(".workspace-tabs").style.setProperty("--tab-index", ["interview", "prompt", "evaluation"].indexOf(view));
+  const hasVersions = Boolean(state.session?.versions.length);
+  for (const name of ["interview", "prompt", "evaluation"]) {
+    const tab = byId(`${name}-tab`);
+    tab.setAttribute("aria-selected", String(name === view));
+    tab.tabIndex = name === view ? 0 : -1;
+  }
+  byId("interview-preview").classList.toggle("is-hidden", view !== "interview");
+  byId("generation-action").classList.toggle("is-hidden", view !== "interview");
+  byId("evaluation-action").classList.toggle("is-hidden", view !== "evaluation");
+  byId("version-history").classList.toggle("is-hidden", view === "interview" || !hasVersions);
+  byId("empty-result").classList.toggle("is-hidden", view === "interview" || hasVersions);
+  byId("result-content").classList.toggle("is-hidden", view === "interview" || !hasVersions);
+  document.querySelector(".prompt-card").classList.toggle("is-hidden", view !== "prompt");
+  document.querySelector(".notes-card").classList.toggle("is-hidden", view !== "prompt");
+  byId("score-card").classList.toggle("is-hidden", view !== "evaluation");
+  const conversationPending = byId("conversation-thinking").getAttribute("aria-busy") === "true";
+  const modelPending = state.generationPending || state.evaluationPending || state.feedbackPending || conversationPending;
+  byId("evaluate-button").disabled = !hasVersions || modelPending;
+  byId("generate-button").disabled = modelPending;
+  const answerSubmit = byId("answer-form")?.querySelector('button[type="submit"]');
+  if (answerSubmit) answerSubmit.disabled = modelPending || (!state.selectedAnswerOptions.length && !state.answerDraftContent.trim());
+  const feedbackSubmit = byId("feedback-form")?.querySelector('button[type="submit"]');
+  if (feedbackSubmit) feedbackSubmit.disabled = modelPending;
+  if (!state.generationPending) byId("generate-button-label").textContent = "生成提示词";
+  byId("confirm-generation-button").disabled = !state.canGenerate || modelPending;
+  byId("confirm-evaluation-button").disabled = !hasVersions || modelPending;
+  if (!hasVersions) {
+    byId("empty-result-tag").textContent = "先访谈，再生成";
+    byId("empty-result-title").textContent = view === "evaluation" ? "先生成一版提示词" : "提示词还未生成";
+    byId("empty-result-copy").textContent = "在需求清单中核对已收集的内容，满足条件后手动生成；随后可在评估页独立评分。";
+  }
+}
+
+function renderInterviewPreview() {
+  const list = byId("interview-preview-list");
+  list.replaceChildren();
+  const answersByQuestion = new Map();
+  let latestQuestionId = null;
+  for (const message of state.session.messages) {
+    if (message.kind === "question") latestQuestionId = String(message.id);
+    if (message.kind !== "answer") continue;
+    const key = message.question_id ? String(message.question_id) : latestQuestionId;
+    if (!key) continue;
+    if (!answersByQuestion.has(key)) answersByQuestion.set(key, []);
+    answersByQuestion.get(key).push(message);
+  }
+  const questions = state.session.messages.filter((message) => message.kind === "question");
+  const answeredCount = questions.filter((message) => answersByQuestion.has(String(message.id))).length;
+  byId("preview-answer-count").textContent = `${answeredCount} / ${questions.length} 已回答`;
+  for (const button of document.querySelectorAll("[data-preview-filter]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.previewFilter === state.previewFilter));
+    button.textContent = button.dataset.previewFilter === "all" ? "全部" : button.dataset.previewFilter === "answered" ? "已回答" : `待回答 ${questions.length - answeredCount}`;
+  }
+  const returnToConversation = () => {
+    if (byId("focus-dialog").open && byId("result-column").closest("#focus-dialog")) byId("focus-dialog-close").click();
+  };
+  const rememberExpansion = (details, key, body) => {
+    details.open = state.previewExpanded.has(key);
+    details.addEventListener("toggle", () => {
+      if (details.open) { state.previewExpanded.add(key); revealElement(body); }
+      else state.previewExpanded.delete(key);
+    });
+  };
+  if (state.previewFilter === "all") {
+    const context = document.createElement("details");
+    context.className = "preview-context";
+    const summary = document.createElement("summary");
+    summary.textContent = "原始需求与反馈";
+    const body = document.createElement("div");
+    for (const message of state.session.messages.filter((item) => !["question", "answer"].includes(item.kind))) {
+      const label = document.createElement("strong");
+      label.textContent = message.kind === "initial" ? "原始需求" : message.kind === "feedback" ? "修改意见" : "访谈小结";
+      const text = document.createElement("p");
+      text.textContent = message.content;
+      body.append(label, text);
+    }
+    context.append(summary, body);
+    rememberExpansion(context, "context", body);
+    list.append(context);
+  }
+  questions.forEach((message, index) => {
+    const answers = answersByQuestion.get(String(message.id)) || [];
+    if ((state.previewFilter === "answered" && !answers.length) || (state.previewFilter === "pending" && answers.length)) return;
+    const article = document.createElement("details");
+    article.className = `requirement-item${answers.length ? " is-answered" : " is-pending"}`;
+    const summary = document.createElement("summary");
+    const number = document.createElement("span");
+    number.className = "requirement-number";
+    number.textContent = String(index + 1).padStart(2, "0");
+    const copy = document.createElement("span");
+    copy.className = "requirement-copy";
+    const title = document.createElement("strong");
+    title.textContent = message.content;
+    const snippet = document.createElement("span");
+    if (answers.length) {
+      const answer = parseAnswerContent(answers[answers.length - 1].content);
+      snippet.textContent = [...answer.selectedOptions, answer.content].filter(Boolean).join("；");
+    } else snippet.textContent = "待回答";
+    copy.append(title, snippet);
+    const status = document.createElement("span");
+    status.className = "requirement-status";
+    status.textContent = answers.length ? "✓" : "○";
+    status.setAttribute("aria-label", answers.length ? "已回答" : "待回答");
+    summary.append(number, copy, status);
+    const body = document.createElement("div");
+    body.className = "requirement-body";
+    summary.addEventListener("click", () => {
+      if (article.open) return;
+      returnToConversation();
+      const target = [...byId("message-list").children].find((node) => node.dataset.messageId === String(message.id));
+      target?.scrollIntoView({ block: "center", behavior: "auto" });
+      if (target) revealElement(target);
+    });
+      for (const answer of answers) {
+        const record = document.createElement("div");
+        record.className = "interview-record-answer";
+        renderAnswerRecord(record, answer);
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.className = "text-button";
+        edit.textContent = "修改这条回答 ↗";
+        edit.addEventListener("click", () => {
+          returnToConversation();
+          const target = [...byId("message-list").children].find((node) => node.dataset.messageId === String(answer.id));
+          const button = target?.querySelector(".message-edit-button");
+          if (button?.getAttribute("aria-expanded") !== "true") button?.click();
+          target?.scrollIntoView({ block: "start", behavior: "auto" });
+          target?.querySelector("textarea")?.focus({ preventScroll: true });
+        });
+        body.append(record, edit);
+      }
+      if (!answers.length) {
+        const pending = document.createElement("p");
+        pending.className = "interview-record-pending";
+        pending.textContent = "在左侧回答这道问题，内容保存后会显示在清单中。";
+        const jump = document.createElement("button");
+        jump.type = "button";
+        jump.className = "text-button";
+        jump.textContent = "去回答 ↗";
+        jump.addEventListener("click", () => {
+          returnToConversation();
+          const target = [...byId("message-list").children].find((node) => node.dataset.messageId === String(message.id));
+          target?.scrollIntoView({ block: "center", behavior: "auto" });
+          byId("answer-input")?.focus({ preventScroll: true });
+        });
+        body.append(pending, jump);
+      }
+      if (message.suggested_answers?.length) {
+        const options = createQuestionOptionsPreview(message);
+        if (options) body.append(options);
+      }
+    article.append(summary, body);
+    rememberExpansion(article, String(message.id), body);
+    list.append(article);
+  });
+  if (!list.children.length) {
+    const empty = document.createElement("p");
+    empty.className = "preview-filter-empty";
+    empty.textContent = state.previewFilter === "pending" ? "当前没有待回答的问题，可继续补充需求或生成提示词。" : "还没有已保存的回答。";
+    list.append(empty);
+  }
 }
 function updateScoreCollapse() {
   const collapsed = state.scoreCollapsed;
@@ -1230,14 +1439,37 @@ function updateHistoryCollapse() {
 
 function renderVersionPanel(version) {
   if (!version) return;
+  const evaluations = version.evaluations || [];
+  const evaluation = state.selectedEvaluationId === "initial" ? null : evaluations.find((item) => item.id === state.selectedEvaluationId) || evaluations[0];
+  const report = evaluation || version;
+  const hasScore = typeof report.overall_score === "number";
   const resultContent = byId("result-content");
   const versionKey = `${state.session.id}:${version.id}`;
   const versionChanged = resultContent.dataset.versionKey !== versionKey;
   resultContent.dataset.versionKey = versionKey;
-  byId("overall-score").textContent = String(version.overall_score);
+  byId("overall-score").textContent = hasScore ? String(report.overall_score) : "—";
+  const reportModel = evaluation?.model || version.evaluation_model || version.generation_model;
+  byId("evaluation-source").textContent = hasScore ? `${evaluation ? "独立评审" : "生成时评分"} · ${reportModel?.model || "历史模型未记录"} · ${displayDateTime(evaluation?.created_at || version.created_at)}` : "本版尚未评分，可选择评审模型后单独评分。";
+  const evaluationHistory = byId("evaluation-history");
+  evaluationHistory.replaceChildren();
+  const reports = [
+    ...(typeof version.overall_score === "number" ? [{ id: "initial", label: `生成时 · ${version.overall_score} 分` }] : []),
+    ...evaluations.map((item, index) => ({ id: item.id, label: `评审 ${evaluations.length - index} · ${item.overall_score} 分` })),
+  ];
+  for (const item of reports) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "evaluation-report-button";
+    button.textContent = item.label;
+    button.setAttribute("aria-pressed", String(item.id === (evaluation?.id || "initial")));
+    button.addEventListener("click", () => { state.selectedEvaluationId = item.id; renderVersionPanel(version); });
+    evaluationHistory.append(button);
+  }
+  byId("evaluation-notes").textContent = evaluation?.improvement_notes || "";
   byId("score-stamp").textContent = `V${String(version.revision).padStart(2, "0")}`;
   byId("prompt-version-number").textContent = String(version.revision).padStart(2, "0");
   byId("prompt-created-at").textContent = displayDateTime(version.created_at);
+  byId("evaluation-target").textContent = `评估已有提示词 · V${String(version.revision).padStart(2, "0")}`;
   byId("prompt-preview-version").textContent = `V${String(version.revision).padStart(2, "0")}`;
   byId("prompt-preview-footer-version").textContent = String(version.revision).padStart(2, "0");
   renderPromptView(version.prompt);
@@ -1247,8 +1479,9 @@ function renderVersionPanel(version) {
 
   const dimensions = byId("dimension-list");
   dimensions.replaceChildren();
-  const dimensionItems = version.dimensions || [];
-  for (const item of version.dimensions || []) {
+  const dimensionItems = report.dimensions || [];
+  document.querySelector(".score-radar-figure").classList.toggle("is-hidden", !hasScore);
+  for (const item of dimensionItems) {
     const row = document.createElement("div");
     row.className = "dimension-row";
     const name = document.createElement("span");
@@ -1273,7 +1506,7 @@ function renderVersionPanel(version) {
   const radar = byId("score-radar");
   const svgNamespace = "http://www.w3.org/2000/svg";
   const center = { x: 160, y: 118 };
-  const radius = 68;
+  const radius = 84;
   const shortLabels = {
     "目标清晰度": "目标",
     "背景完整度": "背景",
@@ -1287,6 +1520,9 @@ function renderVersionPanel(version) {
     label: shortLabels[item.name] || item.name,
     angle: -90 + (360 * index / Math.max(1, dimensionItems.length)),
   }));
+  document.querySelector(".score-radar-hint").textContent = axes.length < 6
+    ? `该历史评分记录了 ${axes.length} 项；重新评分可获得六项维度。分数越高越靠近外圈。`
+    : "每个方向代表一项评分，分数越高越靠近外圈";
   const pointsAt = (scale) => axes.map((axis) => {
     const radians = axis.angle * Math.PI / 180;
     return {
@@ -1346,12 +1582,13 @@ function renderVersionPanel(version) {
     const number = document.createElement("b");
     number.textContent = `V${String(item.revision).padStart(2, "0")}`;
     const scoreLabel = document.createElement("span");
-    scoreLabel.textContent = `${item.overall_score} 分`;
-    button.title = `第 ${item.revision} 版 · 模型评分 ${item.overall_score} 分。点击查看该版提示词和评分。`;
-    button.setAttribute("aria-label", `查看第 ${item.revision} 版，评分 ${item.overall_score} 分`);
+    scoreLabel.textContent = typeof item.overall_score === "number" ? `${item.overall_score} 分` : "待评分";
+    button.title = `第 ${item.revision} 版。点击查看该版提示词及评分记录。`;
+    button.setAttribute("aria-label", `查看第 ${item.revision} 版${typeof item.overall_score === "number" ? `，评分 ${item.overall_score} 分` : "，待评分"}`);
     button.append(number, scoreLabel);
     button.addEventListener("click", () => {
       state.selectedVersionId = item.id;
+      state.selectedEvaluationId = null;
       renderVersionPanel(item);
     });
     versionList.append(button);
@@ -1399,7 +1636,7 @@ async function startSession(initialRequest) {
 }
 
 async function askNext(mode) {
-  if (!state.session || state.askNextPending) return;
+  if (!state.session || state.askNextPending || state.generationPending || state.evaluationPending || state.feedbackPending) return;
   state.askNextPending = true;
   hideRetry();
   setConversationThinking(true, mode === "answer" ? "answer-retry" : mode);
@@ -1422,7 +1659,7 @@ async function askNext(mode) {
 
 async function submitAnswer(event) {
   event.preventDefault();
-  if (!state.session) return;
+  if (!state.session || state.generationPending || state.evaluationPending || state.feedbackPending || event.currentTarget.getAttribute("aria-busy") === "true") return;
   const form = event.currentTarget;
   const input = byId("answer-input");
   const content = input.value.trim();
@@ -1472,6 +1709,10 @@ async function submitAnswer(event) {
 function setComposerThinking(form, isThinking) {
   form.setAttribute("aria-busy", String(isThinking));
   form.querySelectorAll("button, textarea").forEach((control) => { control.disabled = isThinking; });
+  if (!isThinking) {
+    const submit = form.querySelector('button[type="submit"]');
+    if (submit) submit.disabled = !state.selectedAnswerOptions.length && !state.answerDraftContent.trim();
+  }
   setConversationThinking(isThinking, "answer");
 }
 
@@ -1520,6 +1761,7 @@ function setConversationThinking(isThinking, mode = "answer") {
   } else {
     state.conversationThinkingStartedAt = 0;
   }
+  if (state.session) updateWorkspaceView();
 }
 
 function answerMessageContent(content, selectedOptions) {
@@ -1569,7 +1811,7 @@ async function checkAnswerSubmission() {
 
 async function submitFeedback(event) {
   event.preventDefault();
-  if (!state.session) return;
+  if (!state.session || state.generationPending || state.evaluationPending || state.feedbackPending || byId("conversation-thinking").getAttribute("aria-busy") === "true") return;
   const form = event.currentTarget;
   const input = byId("feedback-input");
   const content = input.value.trim();
@@ -1578,6 +1820,8 @@ async function submitFeedback(event) {
     return;
   }
   const button = form.querySelector("button[type=submit]");
+  state.feedbackPending = true;
+  updateWorkspaceView();
   setBusy(button, true, "正在整理意见…");
   try {
     await request("/api/sessions/" + state.session.id + "/refine", {
@@ -1601,30 +1845,68 @@ async function submitFeedback(event) {
       showToast(error.message);
     }
   } finally {
+    state.feedbackPending = false;
     setBusy(button, false);
+    if (state.session) updateWorkspaceView();
   }
 }
 async function generatePrompt() {
-  if (!state.session) return;
+  if (!state.session || state.generationPending || state.evaluationPending || state.feedbackPending || byId("conversation-thinking").getAttribute("aria-busy") === "true") return;
+  const sessionId = state.session.id;
+  state.generationPending = true;
+  updateWorkspaceView();
+  const includeScore = byId("include-generation-score").checked;
   const button = byId("generate-button");
   const action = byId("generation-action");
   action.classList.add("is-generating");
   button.classList.add("is-generating");
-  setBusy(button, true, "正在生成并评分…");
+  setBusy(button, true, includeScore ? "正在生成并评分…" : "正在生成提示词…");
   hideRetry();
   try {
-    const result = await request(`/api/sessions/${state.session.id}/generate`, { method: "POST" });
+    const result = await request(`/api/sessions/${sessionId}/generate`, { method: "POST", body: JSON.stringify({ include_score: includeScore }) });
+    if (state.session?.id !== sessionId) { await refreshSessions(); return; }
     state.selectedVersionId = result.version.id;
-    await loadSession(state.session.id);
+    state.selectedEvaluationId = null;
+    state.workspaceView = "prompt";
+    await loadSession(sessionId);
     await refreshSessions();
     showToast(`版本 ${String(result.version.revision).padStart(2, "0")} 已保存。`);
   } catch (error) {
     if (error.status === 502) showRetry(error.message, "generate");
     else showToast(error.message);
   } finally {
+    state.generationPending = false;
     setBusy(button, false);
     button.classList.remove("is-generating");
     action.classList.remove("is-generating");
+    if (state.session) updateWorkspaceView();
+  }
+}
+
+async function evaluatePrompt() {
+  const version = getSelectedVersion();
+  if (!state.session || !version || state.evaluationPending || state.generationPending || state.feedbackPending || byId("conversation-thinking").getAttribute("aria-busy") === "true") return;
+  const sessionId = state.session.id;
+  state.evaluationPending = true;
+  updateWorkspaceView();
+  const button = byId("evaluate-button");
+  setBusy(button, true, "正在独立评分…");
+  byId("evaluation-action").classList.add("is-evaluating");
+  byId("evaluation-status").textContent = `正在等待评审模型评估 V${String(version.revision).padStart(2, "0")}…`;
+  try {
+    const result = await request(`/api/sessions/${sessionId}/versions/${version.id}/evaluate`, { method: "POST" });
+    if (state.session?.id !== sessionId) { await refreshSessions(); return; }
+    state.selectedEvaluationId = result.evaluation.id;
+    await loadSession(sessionId);
+    await refreshSessions();
+    byId("evaluation-status").textContent = `V${String(version.revision).padStart(2, "0")} 评分已保存，原提示词未改动。`;
+  } catch (error) {
+    byId("evaluation-status").textContent = `评分未完成：${error.message} 可以重试；原提示词和已有评分仍保留。`;
+  } finally {
+    state.evaluationPending = false;
+    setBusy(button, false);
+    byId("evaluation-action").classList.remove("is-evaluating");
+    if (state.session) updateWorkspaceView();
   }
 }
 
@@ -1672,7 +1954,7 @@ function renderModelChip() {
 function renderWorkflowModelSelectors() {
   if (!state.modelSettings) return;
   const settings = state.modelSettings;
-  for (const [workflow, id] of [["interview", "interview-model-select"], ["generation", "generation-model-select"]]) {
+  for (const [workflow, id] of [["interview", "interview-model-select"], ["generation", "generation-model-select"], ["evaluation", "evaluation-model-select"]]) {
     const select = byId(id);
     const savedChoice = settings.workflow_models?.[workflow] || { provider: "", model: "" };
     const selectedProvider = savedChoice.provider || settings.provider;
@@ -1703,6 +1985,21 @@ function renderWorkflowModelSelectors() {
       select.append(group);
     }
     select.value = selectedValue;
+    const choice = selectedWorkflowModel(workflow);
+    const button = byId(`${workflow}-model-button`);
+    button.replaceChildren();
+    const modelName = document.createElement("strong");
+    modelName.textContent = choice.model || "未填写模型";
+    const service = document.createElement("small");
+    service.textContent = `${savedChoice.model ? "" : "默认 · "}${choice.provider === "ollama" ? "Ollama 本地" : "OpenAI 兼容"}`;
+    const copy = document.createElement("span");
+    copy.append(modelName, service);
+    const arrow = document.createElement("span");
+    arrow.className = "workflow-picker-arrow";
+    arrow.textContent = "⌄";
+    arrow.setAttribute("aria-hidden", "true");
+    button.append(copy, arrow);
+    button.title = `${modelName.textContent} · ${service.textContent}，点击切换`;
   }
 }
 
@@ -1712,6 +2009,73 @@ function selectedWorkflowModel(workflow) {
   const choice = settings.workflow_models?.[workflow] || { provider: "", model: "" };
   const provider = choice.provider || settings.provider;
   return { provider, model: choice.model || settings.providers[provider].model || "" };
+}
+
+function openWorkflowPicker(workflow) {
+  state.pickerWorkflow = workflow;
+  byId("workflow-picker-title").textContent = `选择${{ interview: "访谈", generation: "生成", evaluation: "评审" }[workflow]}模型`;
+  byId("workflow-model-search").value = "";
+  byId("workflow-custom-model").value = "";
+  byId("workflow-custom-provider").value = selectedWorkflowModel(workflow)?.provider || "openai";
+  renderWorkflowPicker();
+  byId("workflow-picker-dialog").showModal();
+  byId("workflow-model-search").focus();
+}
+
+function renderWorkflowPicker() {
+  const select = byId(`${state.pickerWorkflow}-model-select`);
+  const query = byId("workflow-model-search").value.trim().toLowerCase();
+  const list = byId("workflow-model-options");
+  list.replaceChildren();
+  let previousGroup = "";
+  for (const option of select.options) {
+    const group = option.parentElement.tagName === "OPTGROUP" ? option.parentElement.label : "默认设置";
+    if (query && !`${group} ${option.textContent}`.toLowerCase().includes(query)) continue;
+    if (group !== previousGroup) {
+      const heading = document.createElement("h3");
+      heading.textContent = group;
+      list.append(heading);
+      previousGroup = group;
+    }
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "workflow-model-option";
+    button.setAttribute("aria-pressed", String(option.value === select.value));
+    const name = document.createElement("strong");
+    name.textContent = option.value ? option.textContent : "沿用默认模型";
+    const caption = document.createElement("small");
+    caption.textContent = option.value ? group : option.textContent;
+    button.append(name, caption);
+    button.addEventListener("click", () => chooseWorkflowModel(option.value));
+    list.append(button);
+  }
+  if (!list.children.length) {
+    const empty = document.createElement("p");
+    empty.textContent = "没有匹配的模型。可自定义输入，或在模型连接中获取列表。";
+    list.append(empty);
+  }
+}
+
+async function chooseWorkflowModel(value) {
+  const workflow = state.pickerWorkflow;
+  const select = byId(`${workflow}-model-select`);
+  if (select.disabled) return;
+  if (value && ![...select.options].some((item) => item.value === value)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = JSON.parse(value)[1];
+    select.append(option);
+  }
+  select.value = value;
+  const dialog = byId("workflow-picker-dialog");
+  dialog.setAttribute("aria-busy", "true");
+  dialog.querySelectorAll("button, input, select").forEach((control) => { control.disabled = true; });
+  try {
+    if (await saveWorkflowModel(workflow, select)) dialog.close();
+  } finally {
+    dialog.setAttribute("aria-busy", "false");
+    dialog.querySelectorAll("button, input, select").forEach((control) => { control.disabled = false; });
+  }
 }
 
 function renderWorkspaceKeepingScroll() {
@@ -1747,12 +2111,14 @@ async function saveWorkflowModel(workflow, select) {
     });
     renderWorkflowModelSelectors();
     if (workflow === "generation") renderWorkspaceKeepingScroll();
-    showToast(choice.model ? `已为${workflow === "interview" ? "访谈" : "生成与评分"}切换模型。` : "已恢复使用默认模型。");
+    showToast(choice.model ? `已为${{ interview: "访谈", generation: "生成", evaluation: "评审" }[workflow]}切换模型。` : "已恢复使用默认模型。");
+    return true;
   } catch (error) {
     state.modelSettings = previousSettings;
     renderWorkflowModelSelectors();
     if (workflow === "generation") renderWorkspaceKeepingScroll();
     showToast(error.message);
+    return false;
   } finally {
     select.disabled = false;
   }
@@ -2010,7 +2376,24 @@ function wireEvents() {
     const content = byId("initial-request").value.trim();
     if (content) startSession(content);
   });
-  byId("generate-button").addEventListener("click", generatePrompt);
+  byId("generate-button").addEventListener("click", () => {
+    if (byId("generate-button").disabled) return;
+    byId("generation-confirm-dialog").showModal();
+  });
+  byId("generation-confirm-close").addEventListener("click", () => byId("generation-confirm-dialog").close());
+  byId("confirm-generation-button").addEventListener("click", () => {
+    if (byId("confirm-generation-button").disabled) return;
+    byId("generation-confirm-dialog").close();
+    generatePrompt();
+  });
+  for (const button of document.querySelectorAll("[data-preview-filter]")) {
+    button.addEventListener("click", () => {
+      state.previewFilter = button.dataset.previewFilter;
+      renderInterviewPreview();
+      byId("interview-preview-list").scrollTop = 0;
+      revealElement(byId("interview-preview-list"));
+    });
+  }
   byId("retry-button").addEventListener("click", retryCurrentAction);
   byId("copy-button").addEventListener("click", copyPrompt);
   byId("prompt-modal-copy-button").addEventListener("click", copyPrompt);
@@ -2051,7 +2434,7 @@ function wireEvents() {
   const focusContent = byId("focus-dialog-content");
   let focusedPanelInfo = null;
   const keepPanelScroll = (panel) => {
-    const positions = [panel, ...panel.querySelectorAll(".conversation-scroll, .composer-dock, .quick-replies-list, .prompt-text")].map((node) => ({
+    const positions = [panel, ...panel.querySelectorAll(".conversation-scroll, .composer-dock, .answer-fields, .quick-replies-list, .prompt-text, #interview-preview-list")].map((node) => ({
       node,
       top: node.scrollTop,
       atEnd: node.scrollHeight > node.clientHeight && node.scrollHeight - node.clientHeight - node.scrollTop < 2,
@@ -2175,6 +2558,41 @@ function wireEvents() {
   });
   byId("interview-model-select").addEventListener("change", (event) => saveWorkflowModel("interview", event.target));
   byId("generation-model-select").addEventListener("change", (event) => saveWorkflowModel("generation", event.target));
+  byId("evaluation-model-select").addEventListener("change", (event) => saveWorkflowModel("evaluation", event.target));
+  for (const workflow of ["interview", "generation", "evaluation"]) {
+    byId(`${workflow}-model-button`).addEventListener("click", () => openWorkflowPicker(workflow));
+  }
+  for (const view of ["interview", "prompt", "evaluation"]) byId(`${view}-tab`).addEventListener("click", () => setWorkspaceView(view));
+  document.querySelector(".workspace-tabs").addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const views = ["interview", "prompt", "evaluation"];
+    const index = views.indexOf(state.workspaceView);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? 2 : (index + (event.key === "ArrowRight" ? 1 : 2)) % 3;
+    setWorkspaceView(views[next]);
+    byId(`${views[next]}-tab`).focus();
+  });
+  byId("include-generation-score").addEventListener("change", updateWorkspaceView);
+  byId("return-interview-button").addEventListener("click", () => setWorkspaceView("interview"));
+  byId("evaluate-button").addEventListener("click", () => {
+    if (byId("evaluate-button").disabled) return;
+    byId("evaluation-confirm-target").textContent = `评估 V${String(getSelectedVersion().revision).padStart(2, "0")} · 评分独立保存，提示词正文保持不变。`;
+    byId("evaluation-confirm-dialog").showModal();
+  });
+  byId("evaluation-confirm-close").addEventListener("click", () => byId("evaluation-confirm-dialog").close());
+  byId("confirm-evaluation-button").addEventListener("click", () => {
+    if (byId("confirm-evaluation-button").disabled) return;
+    byId("evaluation-confirm-dialog").close();
+    evaluatePrompt();
+  });
+  byId("workflow-picker-close").addEventListener("click", () => byId("workflow-picker-dialog").close());
+  byId("workflow-model-search").addEventListener("input", renderWorkflowPicker);
+  byId("workflow-custom-apply").addEventListener("click", () => {
+    const model = byId("workflow-custom-model").value.trim();
+    if (!model) { byId("workflow-custom-model").focus(); showToast("请先填写模型名称。"); return; }
+    chooseWorkflowModel(JSON.stringify([byId("workflow-custom-provider").value, model]));
+  });
+  byId("workflow-picker-settings").addEventListener("click", () => { byId("workflow-picker-dialog").close(); openModelSettingsDialog(); });
   byId("settings-form").addEventListener("submit", saveModelSettings);
   byId("fetch-openai-models").addEventListener("click", () => fetchProviderModels("openai"));
   byId("fetch-ollama-models").addEventListener("click", () => fetchProviderModels("ollama"));
